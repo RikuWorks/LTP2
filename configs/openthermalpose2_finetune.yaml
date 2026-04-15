@@ -1,0 +1,19 @@
+dataset:
+  image_root: data/openthermalpose2/images
+  annotation_file: data/openthermalpose2/annotations/train.json
+  image_size: [256, 192]
+  heatmap_size: [64, 48]
+  num_keypoints: 17
+  grayscale: true
+  body_parts: [head, torso, left_arm, right_arm, left_leg, right_leg]
+optim:
+  batch_size: 16
+  epochs: 60
+  lr: 0.001
+augmentation:
+  partial_crop_prob: 0.45
+detector:
+  image_size: [320, 320]
+  score_threshold: 0.2
+runtime:
+  device: cpu

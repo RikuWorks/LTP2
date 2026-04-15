@@ -1,0 +1,15 @@
+dataset:
+  image_root: data/coco/train2017
+  annotation_file: data/coco/annotations/person_keypoints_train2017.json
+  image_size: [256, 192]
+  heatmap_size: [64, 48]
+  num_keypoints: 17
+  grayscale: false
+optim:
+  batch_size: 32
+  epochs: 80
+  lr: 0.0025
+detector:
+  image_size: [320, 320]
+runtime:
+  device: cpu
