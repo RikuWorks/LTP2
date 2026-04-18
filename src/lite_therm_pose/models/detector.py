@@ -22,12 +22,12 @@ class TinyPersonDetector(nn.Module):
         super().__init__()
         spec = get_model_spec(model_name)
         self.backbone = build_backbone(model_name, in_channels=in_channels)
+        self.output_stride = 8
         channels = self.backbone.out_channels
         self.neck = nn.Sequential(
             nn.Conv2d(channels, spec.neck_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(spec.neck_channels),
             nn.ReLU(inplace=True),
-            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
             nn.Conv2d(spec.neck_channels, spec.neck_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(spec.neck_channels),
             nn.ReLU(inplace=True),
@@ -39,11 +39,16 @@ class TinyPersonDetector(nn.Module):
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features, _ = self.backbone(x)
         fused = self.neck(features)
-        return {
-            "heatmap": self.heatmap_head(fused),
-            "size": F.relu(self.size_head(fused)),
-            "offset": self.offset_head(fused),
-        }
+        target_h = max(x.shape[-2] // self.output_stride, 1)
+        target_w = max(x.shape[-1] // self.output_stride, 1)
+        heatmap = self.heatmap_head(fused)
+        size = F.relu(self.size_head(fused))
+        offset = self.offset_head(fused)
+        if heatmap.shape[-2:] != (target_h, target_w):
+            heatmap = F.interpolate(heatmap, size=(target_h, target_w), mode="bilinear", align_corners=False)
+            size = F.interpolate(size, size=(target_h, target_w), mode="bilinear", align_corners=False)
+            offset = F.interpolate(offset, size=(target_h, target_w), mode="bilinear", align_corners=False)
+        return {"heatmap": heatmap, "size": size, "offset": offset}
 
 
 def focal_loss(logits: torch.Tensor, target: torch.Tensor, alpha: float = 2.0, beta: float = 4.0) -> torch.Tensor:

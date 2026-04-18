@@ -44,6 +44,10 @@ class TopDownPoseCNN(nn.Module):
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features, _ = self.backbone(x)
         decoded = self.decoder(features)
+        target_h = max(x.shape[-2] // 4, 1)
+        target_w = max(x.shape[-1] // 4, 1)
+        if decoded.shape[-2:] != (target_h, target_w):
+            decoded = F.interpolate(decoded, size=(target_h, target_w), mode="bilinear", align_corners=False)
         return {
             "keypoint_heatmaps": self.keypoint_head(decoded),
             "part_heatmaps": self.part_head(decoded),
