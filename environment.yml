@@ -1,17 +1,14 @@
 name: lite-therm-pose
 channels:
-  - pytorch
   - conda-forge
 dependencies:
   - python=3.10
   - pip
   - numpy>=1.24
+  - matplotlib>=3.8
   - opencv>=4.8
   - pillow>=10
   - pyyaml>=6
   - tqdm>=4.66
-  - pytorch>=2.2
-  - torchvision>=0.17
-  - cpuonly
   - pip:
       - -e .

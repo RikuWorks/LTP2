@@ -16,7 +16,8 @@ from .utils import draw_pose, resize_and_normalize
 class RuntimeBundle:
     detector: TinyPersonDetector
     pose_model: TopDownPoseCNN
-    device: torch.device
+    detector_device: torch.device
+    pose_device: torch.device
     dataset_cfg: DatasetConfig
     detector_cfg: DetectorConfig
 
@@ -30,7 +31,7 @@ def load_weights(model: torch.nn.Module, checkpoint_path: str) -> None:
 @torch.no_grad()
 def run_topdown_inference(bundle: RuntimeBundle, frame: np.ndarray) -> np.ndarray:
     detector_input, _, _ = resize_and_normalize(frame, bundle.detector_cfg.image_size, bundle.dataset_cfg.grayscale)
-    det_tensor = torch.from_numpy(detector_input.transpose(2, 0, 1)).unsqueeze(0).to(bundle.device)
+    det_tensor = torch.from_numpy(detector_input.transpose(2, 0, 1)).unsqueeze(0).to(bundle.detector_device)
     det_preds = bundle.detector(det_tensor)
     dets = decode_detections(
         det_preds,
@@ -62,11 +63,11 @@ def run_topdown_inference(bundle: RuntimeBundle, frame: np.ndarray) -> np.ndarra
         crop_boxes.append([x1, y1, x2, y2])
     if not crops:
         return visual
-    crop_tensor = torch.from_numpy(np.stack(crops)).to(bundle.device)
+    crop_tensor = torch.from_numpy(np.stack(crops)).to(bundle.pose_device)
     pose_preds = bundle.pose_model(crop_tensor)
     poses = decode_pose(
         pose_preds,
-        crop_boxes=torch.tensor(crop_boxes, device=crop_tensor.device, dtype=torch.float32),
+        crop_boxes=torch.tensor(crop_boxes, device=bundle.pose_device, dtype=torch.float32),
         image_size=bundle.dataset_cfg.image_size,
         body_parts=bundle.dataset_cfg.body_parts,
     )

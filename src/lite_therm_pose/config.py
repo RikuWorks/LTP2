@@ -11,6 +11,8 @@ import yaml
 class DatasetConfig:
     image_root: str = ""
     annotation_file: str = ""
+    val_image_root: str = ""
+    val_annotation_file: str = ""
     image_size: tuple[int, int] = (256, 192)
     heatmap_size: tuple[int, int] = (64, 48)
     num_keypoints: int = 17
@@ -51,8 +53,15 @@ class DetectorConfig:
 
 
 @dataclass
+class ModelConfig:
+    name: str = "dsconv_s"
+
+
+@dataclass
 class RuntimeConfig:
-    device: str = "cpu"
+    device: str = "auto"
+    detector_device: str = ""
+    pose_device: str = ""
     compile: bool = False
     camera_id: int = 0
     draw_parts: bool = True
@@ -64,6 +73,7 @@ class ExperimentConfig:
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     detector: DetectorConfig = field(default_factory=DetectorConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
 

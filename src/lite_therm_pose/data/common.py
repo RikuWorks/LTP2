@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import Dataset
 
 from ..config import AugmentationConfig, DatasetConfig, DetectorConfig
-from ..utils import draw_gaussian, resize_and_normalize
+from ..utils import draw_gaussian, load_image, resize_and_normalize
 
 
 @dataclass
@@ -74,12 +74,7 @@ class DetectorDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         record = self.records[idx]
-        flag = cv2.IMREAD_GRAYSCALE if self.dataset_cfg.grayscale else cv2.IMREAD_COLOR
-        image = cv2.imread(str(record.image_path), flag)
-        if image is None:
-            raise FileNotFoundError(record.image_path)
-        if image.ndim == 2:
-            image = image[:, :, None]
+        image = load_image(record.image_path, grayscale=self.dataset_cfg.grayscale)
         normalized, scale_x, scale_y = resize_and_normalize(image, self.detector_cfg.image_size, self.dataset_cfg.grayscale)
         bbox = np.array(record.bbox, dtype=np.float32)
         bbox[[0, 2]] *= scale_x
@@ -104,6 +99,7 @@ class DetectorDataset(Dataset):
             "det_size": torch.from_numpy(size),
             "det_offset": torch.from_numpy(offset),
             "det_mask": torch.from_numpy(mask),
+            "gt_bbox": torch.tensor([bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]], dtype=torch.float32),
         }
 
 
@@ -136,12 +132,7 @@ class PoseDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         record = self.records[idx]
-        flag = cv2.IMREAD_GRAYSCALE if self.dataset_cfg.grayscale else cv2.IMREAD_COLOR
-        image = cv2.imread(str(record.image_path), flag)
-        if image is None:
-            raise FileNotFoundError(record.image_path)
-        if image.ndim == 2:
-            image = image[:, :, None]
+        image = load_image(record.image_path, grayscale=self.dataset_cfg.grayscale)
         bbox = self._augment_crop(np.array(record.bbox, dtype=np.float32))
         keypoints = np.array(record.keypoints, dtype=np.float32).reshape(-1, 3)
         x, y, w, h = bbox.tolist()
@@ -156,7 +147,10 @@ class PoseDataset(Dataset):
         kp_heatmaps = np.zeros((self.dataset_cfg.num_keypoints, heat_h, heat_w), dtype=np.float32)
         part_heatmaps = np.zeros((len(self.dataset_cfg.body_parts), heat_h, heat_w), dtype=np.float32)
         visible = np.zeros((self.dataset_cfg.num_keypoints,), dtype=np.float32)
+        weights = np.zeros((self.dataset_cfg.num_keypoints,), dtype=np.float32)
+        keypoint_xy = np.zeros((self.dataset_cfg.num_keypoints, 2), dtype=np.float32)
         for joint_idx, (px, py, vis) in enumerate(keypoints):
+            keypoint_xy[joint_idx] = [px, py]
             if vis <= 0:
                 continue
             local_x = (px - x1) * scale_x
@@ -166,6 +160,7 @@ class PoseDataset(Dataset):
             if 0 <= map_x < heat_w and 0 <= map_y < heat_h:
                 draw_gaussian(kp_heatmaps[joint_idx], (map_x, map_y), radius=2)
                 visible[joint_idx] = 1.0
+                weights[joint_idx] = 1.0 if vis > 1 else 0.5
         for name, center in record.body_parts.items():
             if name not in self.part_map:
                 continue
@@ -184,4 +179,7 @@ class PoseDataset(Dataset):
             "keypoint_heatmaps": torch.from_numpy(kp_heatmaps),
             "part_heatmaps": torch.from_numpy(part_heatmaps),
             "keypoint_visible": torch.from_numpy(visible),
+            "keypoint_weights": torch.from_numpy(weights),
+            "keypoint_xy": torch.from_numpy(keypoint_xy),
+            "bbox_size": torch.tensor([max(x2 - x1, 1), max(y2 - y1, 1)], dtype=torch.float32),
         }

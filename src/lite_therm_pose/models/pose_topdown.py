@@ -6,35 +6,38 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .backbone import DepthwiseSeparableConv, TinyBackbone
+from .backbone import DepthwiseSeparableConv, FlexibleBackbone, get_model_spec
 
 
 @dataclass
 class PosePrediction:
     keypoints: torch.Tensor
     keypoint_scores: torch.Tensor
+    keypoint_visibility: torch.Tensor
     body_parts: dict[str, tuple[int, int]]
 
 
 class TopDownPoseCNN(nn.Module):
-    def __init__(self, num_keypoints: int, num_parts: int, in_channels: int = 1, width_mult: float = 1.0) -> None:
+    def __init__(self, num_keypoints: int, num_parts: int, in_channels: int = 1, model_name: str = "dsconv_s") -> None:
         super().__init__()
-        self.backbone = TinyBackbone(in_channels=in_channels, width_mult=width_mult)
+        spec = get_model_spec(model_name)
+        c0, c1, c2 = spec.decoder_channels
+        self.backbone = FlexibleBackbone(spec, in_channels=in_channels)
         self.decoder = nn.Sequential(
-            nn.Conv2d(self.backbone.out_channels, 128, kernel_size=1, bias=False),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(self.backbone.out_channels, c0, kernel_size=1, bias=False),
+            nn.BatchNorm2d(c0),
             nn.ReLU(inplace=True),
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
-            DepthwiseSeparableConv(128, 96),
+            DepthwiseSeparableConv(c0, c1),
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
-            DepthwiseSeparableConv(96, 64),
+            DepthwiseSeparableConv(c1, c2),
         )
-        self.keypoint_head = nn.Conv2d(64, num_keypoints, kernel_size=1)
-        self.part_head = nn.Conv2d(64, num_parts, kernel_size=1)
+        self.keypoint_head = nn.Conv2d(c2, num_keypoints, kernel_size=1)
+        self.part_head = nn.Conv2d(c2, num_parts, kernel_size=1)
         self.visibility_head = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(64, num_keypoints),
+            nn.Linear(c2, num_keypoints),
         )
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -48,9 +51,14 @@ class TopDownPoseCNN(nn.Module):
 
 
 def pose_loss(preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
-    heatmap_loss = F.mse_loss(preds["keypoint_heatmaps"], batch["keypoint_heatmaps"])
+    heatmap_weights = batch["keypoint_weights"].unsqueeze(-1).unsqueeze(-1)
+    heatmap_loss = ((preds["keypoint_heatmaps"] - batch["keypoint_heatmaps"]) ** 2 * heatmap_weights).mean()
     part_loss = F.mse_loss(preds["part_heatmaps"], batch["part_heatmaps"])
-    visibility_loss = F.binary_cross_entropy_with_logits(preds["visibility"], batch["keypoint_visible"])
+    visibility_loss = F.binary_cross_entropy_with_logits(
+        preds["visibility"],
+        batch["keypoint_visible"],
+        weight=batch["keypoint_weights"].clamp(min=0.25),
+    )
     return heatmap_loss + 0.5 * part_loss + 0.1 * visibility_loss
 
 
@@ -94,6 +102,7 @@ def decode_pose(
             PosePrediction(
                 keypoints=torch.tensor(coords),
                 keypoint_scores=torch.tensor(scores),
+                keypoint_visibility=vis.detach().cpu(),
                 body_parts=part_centers,
             )
         )

@@ -6,16 +6,17 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from .runtime import loader_pin_memory
 from .utils import ensure_dir, to_device
 
 
-def make_loader(dataset, batch_size: int, workers: int, shuffle: bool = True) -> DataLoader:
+def make_loader(dataset, batch_size: int, workers: int, device: torch.device, shuffle: bool = True) -> DataLoader:
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=workers,
-        pin_memory=True,
+        pin_memory=loader_pin_memory(device),
         drop_last=False,
     )
 
@@ -37,8 +38,9 @@ def train_loop(
     epochs: int,
     output_dir: str | Path,
     checkpoint_name: str,
-) -> None:
+) -> list[float]:
     model.train()
+    history: list[float] = []
     for epoch in range(1, epochs + 1):
         running_loss = 0.0
         progress = tqdm(loader, desc=f"epoch {epoch}/{epochs}", leave=False)
@@ -51,4 +53,6 @@ def train_loop(
             optimizer.step()
             running_loss += float(loss.item())
             progress.set_postfix(loss=f"{running_loss / max(progress.n, 1):.4f}")
+        history.append(running_loss / max(len(loader), 1))
         save_checkpoint(output_dir, checkpoint_name, model, optimizer, epoch)
+    return history

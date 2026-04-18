@@ -1,10 +1,14 @@
 dataset:
   image_root: data/coco/train2017
   annotation_file: data/coco/annotations/person_keypoints_train2017.json
+  val_image_root: data/coco/val2017
+  val_annotation_file: data/coco/annotations/person_keypoints_val2017.json
   image_size: [256, 192]
   heatmap_size: [64, 48]
   num_keypoints: 17
   grayscale: false
+model:
+  name: dsconv_s
 optim:
   batch_size: 32
   epochs: 80
@@ -12,4 +16,6 @@ optim:
 detector:
   image_size: [320, 320]
 runtime:
-  device: cpu
+  device: auto
+  detector_device: cuda:0
+  pose_device: cuda:1

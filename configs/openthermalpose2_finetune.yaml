@@ -1,11 +1,15 @@
 dataset:
   image_root: data/openthermalpose2/images
   annotation_file: data/openthermalpose2/annotations/train.json
+  val_image_root: data/openthermalpose2/images
+  val_annotation_file: data/openthermalpose2/annotations/val.json
   image_size: [256, 192]
   heatmap_size: [64, 48]
   num_keypoints: 17
   grayscale: true
   body_parts: [head, torso, left_arm, right_arm, left_leg, right_leg]
+model:
+  name: dsconv_s
 optim:
   batch_size: 16
   epochs: 60
@@ -16,4 +20,6 @@ detector:
   image_size: [320, 320]
   score_threshold: 0.2
 runtime:
-  device: cpu
+  device: auto
+  detector_device: cuda:0
+  pose_device: cuda:1

@@ -90,6 +90,16 @@ def resize_and_normalize(image: np.ndarray, size: tuple[int, int], grayscale: bo
     return normalized, target_w / src_w, target_h / src_h
 
 
+def load_image(path: str | Path, grayscale: bool) -> np.ndarray:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(path)
+    if grayscale:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        return gray[:, :, None]
+    return image
+
+
 def skeleton_edges() -> list[tuple[int, int]]:
     return [
         (5, 7), (7, 9), (6, 8), (8, 10),
