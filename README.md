@@ -173,6 +173,8 @@ python run_model_suite_distributed.py \
 ```
 
 この設定では、モデル順を固定したまま先頭 10 モデルを machine 0、残り 10 モデルを machine 1 に割り当てます。
+各マシン内では、`detector_device: cuda:0` と `pose_device: cuda:1` が別 GPU なら、
+全モデル一括実験の `pretrain` と `finetune` の各段階で人物検出器学習と姿勢推定器学習を同時実行します。
 
 ## 学習済み重みの評価
 

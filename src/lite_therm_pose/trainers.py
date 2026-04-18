@@ -51,3 +51,17 @@ def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "")
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)
     stats = train_loop(model, loader, optimizer, pose_loss, device, cfg.optim.epochs, output_dir, "pose_last.pt")
     return model, stats
+
+
+def load_trained_detector(cfg: ExperimentConfig, checkpoint_path: str | Path) -> TinyPersonDetector:
+    model, _ = build_detector(cfg)
+    payload = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(payload["model"] if "model" in payload else payload, strict=False)
+    return model
+
+
+def load_trained_pose(cfg: ExperimentConfig, checkpoint_path: str | Path) -> TopDownPoseCNN:
+    model, _ = build_pose_model(cfg)
+    payload = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(payload["model"] if "model" in payload else payload, strict=False)
+    return model

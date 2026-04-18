@@ -1,18 +1,71 @@
 from __future__ import annotations
 
 import json
+import multiprocessing as mp
 from copy import deepcopy
 from pathlib import Path
 
 from .config import ExperimentConfig, load_config
 from .evaluate import evaluate_detector_model, evaluate_joint_pipeline, evaluate_pose_model, write_summary_report
 from .profile import checkpoint_size_mb, parameter_stats
-from .trainers import train_detector, train_pose
+from .runtime import resolve_model_device
+from .trainers import load_trained_detector, load_trained_pose, train_detector, train_pose
 from .utils import ensure_dir
 
 
 def clone_cfg(cfg: ExperimentConfig) -> ExperimentConfig:
     return deepcopy(cfg)
+
+
+def _run_detector_job(cfg: ExperimentConfig, output_dir: str | Path, weights: str, queue: mp.Queue) -> None:
+    try:
+        _, stats = train_detector(cfg, output_dir, weights=weights)
+        queue.put({"kind": "detector", "stats": stats, "error": ""})
+    except Exception as exc:  # pragma: no cover
+        queue.put({"kind": "detector", "stats": None, "error": repr(exc)})
+
+
+def _run_pose_job(cfg: ExperimentConfig, output_dir: str | Path, weights: str, queue: mp.Queue) -> None:
+    try:
+        _, stats = train_pose(cfg, output_dir, weights=weights)
+        queue.put({"kind": "pose", "stats": stats, "error": ""})
+    except Exception as exc:  # pragma: no cover
+        queue.put({"kind": "pose", "stats": None, "error": repr(exc)})
+
+
+def _devices_allow_parallel(cfg: ExperimentConfig) -> bool:
+    detector_device = resolve_model_device(cfg.runtime.detector_device, cfg.runtime.device, "detector")
+    pose_device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
+    return detector_device.type == "cuda" and pose_device.type == "cuda" and detector_device != pose_device
+
+
+def _train_phase_parallel(cfg: ExperimentConfig, det_output_dir: Path, pose_output_dir: Path, det_weights: str = "", pose_weights: str = "") -> tuple[dict[str, float | list[float]], dict[str, float | list[float]]]:
+    if not _devices_allow_parallel(cfg):
+        _, det_stats = train_detector(cfg, det_output_dir, weights=det_weights)
+        _, pose_stats = train_pose(cfg, pose_output_dir, weights=pose_weights)
+        return det_stats, pose_stats
+
+    ctx = mp.get_context("spawn")
+    queue: mp.Queue = ctx.Queue()
+    det_proc = ctx.Process(target=_run_detector_job, args=(cfg, det_output_dir, det_weights, queue))
+    pose_proc = ctx.Process(target=_run_pose_job, args=(cfg, pose_output_dir, pose_weights, queue))
+    det_proc.start()
+    pose_proc.start()
+
+    results: dict[str, dict[str, float | list[float]]] = {}
+    for _ in range(2):
+        item = queue.get()
+        if item["error"]:
+            det_proc.join(timeout=1)
+            pose_proc.join(timeout=1)
+            raise RuntimeError(f"{item['kind']} training failed: {item['error']}")
+        results[item["kind"]] = item["stats"]
+
+    det_proc.join()
+    pose_proc.join()
+    if det_proc.exitcode != 0 or pose_proc.exitcode != 0:
+        raise RuntimeError(f"parallel training failed: detector exit={det_proc.exitcode}, pose exit={pose_proc.exitcode}")
+    return results["detector"], results["pose"]
 
 
 def run_suite(
@@ -38,10 +91,17 @@ def run_suite(
         det_fine_dir = model_root / "finetune_detector"
         pose_fine_dir = model_root / "finetune_pose"
 
-        detector_pre, det_pre_stats = train_detector(pretrain_cfg, det_pre_dir)
-        pose_pre, pose_pre_stats = train_pose(pretrain_cfg, pose_pre_dir)
-        detector_fine, det_fine_stats = train_detector(finetune_cfg, det_fine_dir, weights=str(det_pre_dir / "detector_last.pt"))
-        pose_fine, pose_fine_stats = train_pose(finetune_cfg, pose_fine_dir, weights=str(pose_pre_dir / "pose_last.pt"))
+        det_pre_stats, pose_pre_stats = _train_phase_parallel(pretrain_cfg, det_pre_dir, pose_pre_dir)
+        det_fine_stats, pose_fine_stats = _train_phase_parallel(
+            finetune_cfg,
+            det_fine_dir,
+            pose_fine_dir,
+            det_weights=str(det_pre_dir / "detector_last.pt"),
+            pose_weights=str(pose_pre_dir / "pose_last.pt"),
+        )
+
+        detector_fine = load_trained_detector(finetune_cfg, det_fine_dir / "detector_last.pt")
+        pose_fine = load_trained_pose(finetune_cfg, pose_fine_dir / "pose_last.pt")
 
         det_metrics = evaluate_detector_model(detector_fine, finetune_cfg)
         pose_metrics = evaluate_pose_model(pose_fine, finetune_cfg)
