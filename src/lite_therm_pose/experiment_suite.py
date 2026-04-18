@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .config import ExperimentConfig, load_config
 from .evaluate import evaluate_detector_model, evaluate_joint_pipeline, evaluate_pose_model, write_summary_report
+from .profile import checkpoint_size_mb, parameter_stats
 from .trainers import train_detector, train_pose
 from .utils import ensure_dir
 
@@ -37,21 +38,37 @@ def run_suite(
         det_fine_dir = model_root / "finetune_detector"
         pose_fine_dir = model_root / "finetune_pose"
 
-        detector_pre, det_pre_hist = train_detector(pretrain_cfg, det_pre_dir)
-        pose_pre, pose_pre_hist = train_pose(pretrain_cfg, pose_pre_dir)
-        detector_fine, det_fine_hist = train_detector(finetune_cfg, det_fine_dir, weights=str(det_pre_dir / "detector_last.pt"))
-        pose_fine, pose_fine_hist = train_pose(finetune_cfg, pose_fine_dir, weights=str(pose_pre_dir / "pose_last.pt"))
+        detector_pre, det_pre_stats = train_detector(pretrain_cfg, det_pre_dir)
+        pose_pre, pose_pre_stats = train_pose(pretrain_cfg, pose_pre_dir)
+        detector_fine, det_fine_stats = train_detector(finetune_cfg, det_fine_dir, weights=str(det_pre_dir / "detector_last.pt"))
+        pose_fine, pose_fine_stats = train_pose(finetune_cfg, pose_fine_dir, weights=str(pose_pre_dir / "pose_last.pt"))
 
         det_metrics = evaluate_detector_model(detector_fine, finetune_cfg)
         pose_metrics = evaluate_pose_model(pose_fine, finetune_cfg)
         joint_metrics = evaluate_joint_pipeline(detector_fine, pose_fine, finetune_cfg)
+        detector_profile = parameter_stats(detector_fine, "detector")
+        pose_profile = parameter_stats(pose_fine, "pose")
 
         row: dict[str, float | str] = {
             "model": model_name,
-            "det_pre_loss": round(det_pre_hist[-1], 6) if det_pre_hist else 0.0,
-            "pose_pre_loss": round(pose_pre_hist[-1], 6) if pose_pre_hist else 0.0,
-            "det_fine_loss": round(det_fine_hist[-1], 6) if det_fine_hist else 0.0,
-            "pose_fine_loss": round(pose_fine_hist[-1], 6) if pose_fine_hist else 0.0,
+            "model_family": finetune_cfg.model.name.split("_")[0],
+            "det_pre_loss": round(float(det_pre_stats["loss_history"][-1]), 6) if det_pre_stats["loss_history"] else 0.0,
+            "pose_pre_loss": round(float(pose_pre_stats["loss_history"][-1]), 6) if pose_pre_stats["loss_history"] else 0.0,
+            "det_fine_loss": round(float(det_fine_stats["loss_history"][-1]), 6) if det_fine_stats["loss_history"] else 0.0,
+            "pose_fine_loss": round(float(pose_fine_stats["loss_history"][-1]), 6) if pose_fine_stats["loss_history"] else 0.0,
+            "det_pre_train_seconds": round(float(det_pre_stats["train_seconds_total"]), 6),
+            "pose_pre_train_seconds": round(float(pose_pre_stats["train_seconds_total"]), 6),
+            "det_fine_train_seconds": round(float(det_fine_stats["train_seconds_total"]), 6),
+            "pose_fine_train_seconds": round(float(pose_fine_stats["train_seconds_total"]), 6),
+            "det_epoch_seconds_mean": round(float(det_fine_stats["epoch_seconds_mean"]), 6),
+            "pose_epoch_seconds_mean": round(float(pose_fine_stats["epoch_seconds_mean"]), 6),
+            "det_train_peak_memory_mb": round(float(det_fine_stats["train_peak_memory_mb"]), 6),
+            "pose_train_peak_memory_mb": round(float(pose_fine_stats["train_peak_memory_mb"]), 6),
+            **{key: round(value, 6) for key, value in detector_profile.items()},
+            **{key: round(value, 6) for key, value in pose_profile.items()},
+            "total_params_m": round(detector_profile["detector_params_m"] + pose_profile["pose_params_m"], 6),
+            "detector_checkpoint_mb": round(checkpoint_size_mb(det_fine_dir / "detector_last.pt"), 6),
+            "pose_checkpoint_mb": round(checkpoint_size_mb(pose_fine_dir / "pose_last.pt"), 6),
             **{key: round(value, 6) for key, value in det_metrics.items()},
             **{key: round(value, 6) for key, value in pose_metrics.items()},
             **{key: round(value, 6) for key, value in joint_metrics.items()},

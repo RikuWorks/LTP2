@@ -7,7 +7,8 @@ from torch import nn
 from torch.nn import functional as F
 
 from ..utils import nms
-from .backbone import FlexibleBackbone, get_model_spec
+from .backbone import build_backbone
+from .specs import get_model_spec
 
 
 @dataclass
@@ -20,7 +21,7 @@ class TinyPersonDetector(nn.Module):
     def __init__(self, in_channels: int = 1, model_name: str = "dsconv_s") -> None:
         super().__init__()
         spec = get_model_spec(model_name)
-        self.backbone = FlexibleBackbone(spec, in_channels=in_channels)
+        self.backbone = build_backbone(model_name, in_channels=in_channels)
         channels = self.backbone.out_channels
         self.neck = nn.Sequential(
             nn.Conv2d(channels, spec.neck_channels, kernel_size=1, bias=False),

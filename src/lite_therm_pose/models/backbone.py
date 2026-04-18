@@ -2,17 +2,25 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
-from .specs import BackboneSpec, MODEL_SPECS, get_model_spec
+from .specs import BackboneSpec, get_model_spec
+
+
+def conv_bn_relu(in_channels: int, out_channels: int, kernel_size: int = 3, stride: int = 1, groups: int = 1) -> nn.Sequential:
+    padding = kernel_size // 2
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, groups=groups, bias=False),
+        nn.BatchNorm2d(out_channels),
+        nn.ReLU(inplace=True),
+    )
 
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, stride: int = 1) -> None:
         super().__init__()
         self.block = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=stride, padding=1, groups=in_channels, bias=False),
-            nn.BatchNorm2d(in_channels),
-            nn.ReLU(inplace=True),
+            conv_bn_relu(in_channels, in_channels, kernel_size=3, stride=stride, groups=in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
@@ -36,18 +44,109 @@ class ResidualDSConv(nn.Module):
         return self.act(self.block(x) + x)
 
 
+class CSPBlock(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        hidden = max(channels // 2, 8)
+        self.left = conv_bn_relu(channels, hidden, kernel_size=1)
+        self.right = nn.Sequential(
+            conv_bn_relu(channels, hidden, kernel_size=1),
+            DepthwiseSeparableConv(hidden, hidden),
+            DepthwiseSeparableConv(hidden, hidden),
+        )
+        self.fuse = conv_bn_relu(hidden * 2, channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.fuse(torch.cat([self.left(x), self.right(x)], dim=1))
+
+
 class FlexibleBackbone(nn.Module):
     def __init__(self, spec: BackboneSpec, in_channels: int = 1) -> None:
         super().__init__()
-        ch = [max(spec.stem_channels, int(c * spec.width_mult)) for c in [24, 48, 96, 160]]
+        self.spec = spec
+        builder = {
+            "flex": self._build_flex,
+            "hrnet": self._build_hrnet,
+            "unet": self._build_unet,
+            "hourglass": self._build_hourglass,
+            "fpn": self._build_fpn,
+            "csp": self._build_csp,
+        }[spec.family]
+        builder(in_channels)
+
+    def _channels(self) -> list[int]:
+        return [max(self.spec.stem_channels, int(c * self.spec.width_mult)) for c in [24, 48, 96, 160]]
+
+    def _build_flex(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "flex"
+        self.stem = conv_bn_relu(in_channels, ch[0], stride=2)
+        self.stage1 = self._make_stage(ch[0], ch[1], self.spec.block_type)
+        self.stage2 = self._make_stage(ch[1], ch[2], self.spec.block_type)
+        self.stage3 = self._make_stage(ch[2], ch[3], self.spec.block_type)
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[1]
+
+    def _build_hrnet(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "hrnet"
         self.stem = nn.Sequential(
-            nn.Conv2d(in_channels, ch[0], kernel_size=3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(ch[0]),
-            nn.ReLU(inplace=True),
+            conv_bn_relu(in_channels, ch[0], stride=2),
+            conv_bn_relu(ch[0], ch[0]),
         )
-        self.stage1 = self._make_stage(ch[0], ch[1], spec.block_type)
-        self.stage2 = self._make_stage(ch[1], ch[2], spec.block_type)
-        self.stage3 = self._make_stage(ch[2], ch[3], spec.block_type)
+        self.high = nn.Sequential(conv_bn_relu(ch[0], ch[1]), ResidualDSConv(ch[1]))
+        self.low = nn.Sequential(conv_bn_relu(ch[0], ch[1], stride=2), ResidualDSConv(ch[1]))
+        self.exchange1 = conv_bn_relu(ch[1] * 2, ch[2])
+        self.high2 = nn.Sequential(conv_bn_relu(ch[2], ch[2]), ResidualDSConv(ch[2]))
+        self.low2 = nn.Sequential(conv_bn_relu(ch[2], ch[3], stride=2), ResidualDSConv(ch[3]))
+        self.fuse = conv_bn_relu(ch[2] + ch[3], ch[3], kernel_size=1)
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[2]
+
+    def _build_unet(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "unet"
+        self.enc1 = nn.Sequential(conv_bn_relu(in_channels, ch[0]), conv_bn_relu(ch[0], ch[0]))
+        self.enc2 = nn.Sequential(conv_bn_relu(ch[0], ch[1], stride=2), conv_bn_relu(ch[1], ch[1]))
+        self.enc3 = nn.Sequential(conv_bn_relu(ch[1], ch[2], stride=2), conv_bn_relu(ch[2], ch[2]))
+        self.bottleneck = nn.Sequential(conv_bn_relu(ch[2], ch[3], stride=2), conv_bn_relu(ch[3], ch[3]))
+        self.dec3 = conv_bn_relu(ch[3] + ch[2], ch[2])
+        self.dec2 = conv_bn_relu(ch[2] + ch[1], ch[2])
+        self.out_channels = ch[2]
+        self.low_level_channels = ch[1]
+
+    def _build_hourglass(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "hourglass"
+        self.stem = conv_bn_relu(in_channels, ch[0], stride=2)
+        self.down1 = conv_bn_relu(ch[0], ch[1], stride=2)
+        self.down2 = conv_bn_relu(ch[1], ch[2], stride=2)
+        self.bottleneck = nn.Sequential(ResidualDSConv(ch[2]), ResidualDSConv(ch[2]))
+        self.up1 = conv_bn_relu(ch[2] + ch[1], ch[2])
+        self.up2 = conv_bn_relu(ch[2] + ch[0], ch[3])
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[1]
+
+    def _build_fpn(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "fpn"
+        self.c1 = conv_bn_relu(in_channels, ch[0], stride=2)
+        self.c2 = conv_bn_relu(ch[0], ch[1], stride=2)
+        self.c3 = conv_bn_relu(ch[1], ch[2], stride=2)
+        self.c4 = conv_bn_relu(ch[2], ch[3], stride=2)
+        self.l3 = conv_bn_relu(ch[2], ch[2], kernel_size=1)
+        self.l4 = conv_bn_relu(ch[3], ch[2], kernel_size=1)
+        self.out_proj = conv_bn_relu(ch[2], ch[3])
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[2]
+
+    def _build_csp(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "csp"
+        self.stem = conv_bn_relu(in_channels, ch[0], stride=2)
+        self.stage1 = nn.Sequential(conv_bn_relu(ch[0], ch[1], stride=2), CSPBlock(ch[1]))
+        self.stage2 = nn.Sequential(conv_bn_relu(ch[1], ch[2], stride=2), CSPBlock(ch[2]))
+        self.stage3 = nn.Sequential(conv_bn_relu(ch[2], ch[3], stride=2), CSPBlock(ch[3]))
         self.out_channels = ch[3]
         self.low_level_channels = ch[1]
 
@@ -61,8 +160,54 @@ class FlexibleBackbone(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x = self.stem(x)
-        low_level = self.stage1(x)
-        x = self.stage2(low_level)
+        if self.mode == "flex":
+            x = self.stem(x)
+            low = self.stage1(x)
+            x = self.stage2(low)
+            x = self.stage3(x)
+            return x, low
+        if self.mode == "hrnet":
+            x = self.stem(x)
+            high = self.high(x)
+            low = self.low(x)
+            low_up = F.interpolate(low, size=high.shape[-2:], mode="bilinear", align_corners=False)
+            fused = self.exchange1(torch.cat([high, low_up], dim=1))
+            high2 = self.high2(fused)
+            low2 = self.low2(fused)
+            low2_up = F.interpolate(low2, size=high2.shape[-2:], mode="bilinear", align_corners=False)
+            out = self.fuse(torch.cat([high2, low2_up], dim=1))
+            return out, high2
+        if self.mode == "unet":
+            e1 = self.enc1(x)
+            e2 = self.enc2(e1)
+            e3 = self.enc3(e2)
+            bottleneck = self.bottleneck(e3)
+            d3 = self.dec3(torch.cat([F.interpolate(bottleneck, size=e3.shape[-2:], mode="bilinear", align_corners=False), e3], dim=1))
+            out = self.dec2(torch.cat([F.interpolate(d3, size=e2.shape[-2:], mode="bilinear", align_corners=False), e2], dim=1))
+            return out, e2
+        if self.mode == "hourglass":
+            s = self.stem(x)
+            d1 = self.down1(s)
+            d2 = self.down2(d1)
+            b = self.bottleneck(d2)
+            u1 = self.up1(torch.cat([F.interpolate(b, size=d1.shape[-2:], mode="bilinear", align_corners=False), d1], dim=1))
+            out = self.up2(torch.cat([F.interpolate(u1, size=s.shape[-2:], mode="bilinear", align_corners=False), s], dim=1))
+            return out, d1
+        if self.mode == "fpn":
+            c1 = self.c1(x)
+            c2 = self.c2(c1)
+            c3 = self.c3(c2)
+            c4 = self.c4(c3)
+            p4 = self.l4(c4)
+            p3 = self.l3(c3) + F.interpolate(p4, size=c3.shape[-2:], mode="nearest")
+            out = self.out_proj(p3)
+            return out, p3
+        s = self.stem(x)
+        low = self.stage1(s)
+        x = self.stage2(low)
         x = self.stage3(x)
-        return x, low_level
+        return x, low
+
+
+def build_backbone(model_name: str, in_channels: int = 1) -> FlexibleBackbone:
+    return FlexibleBackbone(get_model_spec(model_name), in_channels=in_channels)

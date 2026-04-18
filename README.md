@@ -5,7 +5,7 @@
 - サーマル画像を厳密に白黒化して扱う前処理
 - 軽量 CNN ベースの自作人物検出器
 - 17 キーポイント + 可視性情報を考慮した姿勢推定
-- 10 種類前後の軽量モデル切り替え
+- 20 種類の軽量モデル切り替え
 - COCO 事前学習 + OpenThermalPose2 ファインチューニング
 - 人検出のみ / 骨格推定のみ / 結合パイプラインの個別評価
 - `pretrain -> finetune -> test -> report` をまとめて実行する一括実験
@@ -86,6 +86,16 @@ python list_models.py
 - `resds_m`
 - `resds_l`
 - `resds_xl`
+- `hrnet_w18_small`
+- `hrnet_w18`
+- `hrnet_w32`
+- `unet_tiny`
+- `unet_small`
+- `hourglass_tiny`
+- `hourglass_small`
+- `fpn_tiny`
+- `fpn_small`
+- `csp_tiny`
 
 ## 単体学習
 
@@ -130,6 +140,39 @@ python run_model_suite.py \
   --models dsconv_s,resds_m,resds_l \
   --output outputs/model_suite_subset
 ```
+
+## 2台で10モデルずつ実行
+
+20 モデルを 2 台で均等に分けて回せます。  
+分割内容の確認:
+
+```bash
+python list_model_assignments.py --num-machines 2
+```
+
+1台目:
+
+```bash
+python run_model_suite_distributed.py \
+  --pretrain-config configs/coco_pretrain.yaml \
+  --finetune-config configs/openthermalpose2_finetune.yaml \
+  --machine-index 0 \
+  --num-machines 2 \
+  --output outputs/model_suite_distributed
+```
+
+2台目:
+
+```bash
+python run_model_suite_distributed.py \
+  --pretrain-config configs/coco_pretrain.yaml \
+  --finetune-config configs/openthermalpose2_finetune.yaml \
+  --machine-index 1 \
+  --num-machines 2 \
+  --output outputs/model_suite_distributed
+```
+
+この設定では、モデル順を固定したまま先頭 10 モデルを machine 0、残り 10 モデルを machine 1 に割り当てます。
 
 ## 学習済み重みの評価
 
@@ -188,3 +231,27 @@ RTX 3090 x2 の正常な環境なら、少なくとも次のようになりま�
 - `det_fps`
 - `pose_fps`
 - `joint_fps`
+
+追加で、研究比較向けの基本スペックも記録します。
+
+- `det_latency_ms`
+- `pose_latency_ms`
+- `joint_latency_ms`
+- `det_peak_memory_mb`
+- `pose_peak_memory_mb`
+- `joint_peak_memory_mb`
+- `det_train_peak_memory_mb`
+- `pose_train_peak_memory_mb`
+- `detector_params_m`
+- `pose_params_m`
+- `total_params_m`
+- `detector_model_size_mb`
+- `pose_model_size_mb`
+- `detector_checkpoint_mb`
+- `pose_checkpoint_mb`
+- `det_pre_train_seconds`
+- `pose_pre_train_seconds`
+- `det_fine_train_seconds`
+- `pose_fine_train_seconds`
+- `det_epoch_seconds_mean`
+- `pose_epoch_seconds_mean`

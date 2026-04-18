@@ -1,0 +1,54 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Conda / local env files
+.env
+.python-version
+
+# Dataset directories
+data/
+datasets/
+
+# Raw downloads and extracted archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Training / evaluation outputs
+runs/
+logs/
+checkpoints/
+
+# Heavy experiment artifacts
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Keep shareable result summaries under outputs/
+outputs/*
+!outputs/.gitkeep
+!outputs/**/
+!outputs/**/*.csv
+!outputs/**/*.md
+!outputs/**/*.json
+!outputs/**/*.png
+!outputs/**/*.txt
+
+# Notebook and editor artifacts
+.ipynb_checkpoints/
+.vscode/
+.idea/

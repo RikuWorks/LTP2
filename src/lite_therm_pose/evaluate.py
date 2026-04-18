@@ -14,6 +14,7 @@ from .data.common import load_coco_records
 from .engine import make_loader
 from .models.detector import TinyPersonDetector, decode_detections
 from .models.pose_topdown import TopDownPoseCNN, decode_pose
+from .profile import peak_memory_mb, reset_peak_memory
 from .utils import box_iou_xyxy, ensure_dir, load_image, resize_and_normalize
 
 
@@ -27,12 +28,16 @@ def evaluate_detector_model(model: TinyPersonDetector, cfg: ExperimentConfig) ->
     model.eval()
     recalls = []
     ious = []
+    batch_latencies = []
+    reset_peak_memory(device)
     start = time.perf_counter()
     with torch.no_grad():
         for batch in loader:
+            batch_start = time.perf_counter()
             images = batch["image"].to(device)
             gt_boxes = batch["gt_bbox"].to(device)
             preds = decode_detections(model(images), cfg.detector.stride, cfg.detector.score_threshold, cfg.detector.nms_iou_threshold, cfg.detector.max_detections)
+            batch_latencies.append(time.perf_counter() - batch_start)
             for pred, gt_box in zip(preds, gt_boxes):
                 if pred.boxes.numel() == 0:
                     recalls.append(0.0)
@@ -47,6 +52,8 @@ def evaluate_detector_model(model: TinyPersonDetector, cfg: ExperimentConfig) ->
         "det_recall50": float(np.mean(recalls) if recalls else 0.0),
         "det_mean_iou": float(np.mean(ious) if ious else 0.0),
         "det_fps": count / max(elapsed, 1e-6),
+        "det_latency_ms": 1000.0 * float(np.mean(batch_latencies) if batch_latencies else 0.0),
+        "det_peak_memory_mb": peak_memory_mb(device),
     }
 
 
@@ -78,12 +85,16 @@ def evaluate_pose_model(model: TopDownPoseCNN, cfg: ExperimentConfig) -> dict[st
     model.eval()
     all_pck = []
     all_vis = []
+    batch_latencies = []
+    reset_peak_memory(device)
     start = time.perf_counter()
     with torch.no_grad():
         for batch in loader:
+            batch_start = time.perf_counter()
             images = batch["image"].to(device)
             boxes = batch["crop_box"].to(device)
             preds = decode_pose(model(images), boxes, cfg.dataset.image_size, cfg.dataset.body_parts)
+            batch_latencies.append(time.perf_counter() - batch_start)
             pck, vis_acc = _pose_metrics_from_batch(preds, batch)
             all_pck.extend(pck)
             all_vis.extend(vis_acc)
@@ -93,6 +104,8 @@ def evaluate_pose_model(model: TopDownPoseCNN, cfg: ExperimentConfig) -> dict[st
         "pose_pck20": float(np.mean(all_pck) if all_pck else 0.0),
         "pose_visibility_acc": float(np.mean(all_vis) if all_vis else 0.0),
         "pose_fps": count / max(elapsed, 1e-6),
+        "pose_latency_ms": 1000.0 * float(np.mean(batch_latencies) if batch_latencies else 0.0),
+        "pose_peak_memory_mb": peak_memory_mb(device),
     }
 
 
@@ -106,9 +119,14 @@ def evaluate_joint_pipeline(detector: TinyPersonDetector, pose_model: TopDownPos
     detector.eval()
     pose_model.eval()
     pck = []
+    latencies = []
+    reset_peak_memory(detector_device)
+    if pose_device != detector_device:
+        reset_peak_memory(pose_device)
     start = time.perf_counter()
     with torch.no_grad():
         for record in records:
+            sample_start = time.perf_counter()
             image = load_image(record.image_path, grayscale=dataset_cfg.grayscale)
             det_input, scale_x, scale_y = resize_and_normalize(image, cfg.detector.image_size, dataset_cfg.grayscale)
             det_tensor = torch.from_numpy(det_input.transpose(2, 0, 1)).unsqueeze(0).to(detector_device)
@@ -144,9 +162,15 @@ def evaluate_joint_pipeline(detector: TinyPersonDetector, pose_model: TopDownPos
             if visible.any():
                 dist = np.linalg.norm(pred_xy - gt_xy, axis=1)
                 pck.append(float(np.mean((dist[visible] / diag) <= 0.2)))
+            latencies.append(time.perf_counter() - sample_start)
     elapsed = time.perf_counter() - start
     count = max(len(records), 1)
-    return {"joint_score": float(np.mean(pck) if pck else 0.0), "joint_fps": count / max(elapsed, 1e-6)}
+    return {
+        "joint_score": float(np.mean(pck) if pck else 0.0),
+        "joint_fps": count / max(elapsed, 1e-6),
+        "joint_latency_ms": 1000.0 * float(np.mean(latencies) if latencies else 0.0),
+        "joint_peak_memory_mb": max(peak_memory_mb(detector_device), peak_memory_mb(pose_device)),
+    }
 
 
 def write_summary_report(rows: list[dict[str, float | str]], output_dir: str | Path) -> None:

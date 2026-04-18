@@ -6,7 +6,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .backbone import DepthwiseSeparableConv, FlexibleBackbone, get_model_spec
+from .backbone import DepthwiseSeparableConv, build_backbone
+from .specs import get_model_spec
 
 
 @dataclass
@@ -22,7 +23,7 @@ class TopDownPoseCNN(nn.Module):
         super().__init__()
         spec = get_model_spec(model_name)
         c0, c1, c2 = spec.decoder_channels
-        self.backbone = FlexibleBackbone(spec, in_channels=in_channels)
+        self.backbone = build_backbone(model_name, in_channels=in_channels)
         self.decoder = nn.Sequential(
             nn.Conv2d(self.backbone.out_channels, c0, kernel_size=1, bias=False),
             nn.BatchNorm2d(c0),

@@ -29,7 +29,7 @@ def build_pose_model(cfg: ExperimentConfig) -> tuple[TopDownPoseCNN, torch.devic
     ).to(device), device
 
 
-def train_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TinyPersonDetector, list[float]]:
+def train_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TinyPersonDetector, dict[str, float | list[float]]]:
     model, device = build_detector(cfg)
     if weights:
         payload = torch.load(weights, map_location="cpu")
@@ -37,11 +37,11 @@ def train_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str =
     dataset = DetectorDataset(cfg.dataset, cfg.detector, cfg.augmentation)
     loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)
-    history = train_loop(model, loader, optimizer, detector_loss, device, cfg.optim.epochs, output_dir, "detector_last.pt")
-    return model, history
+    stats = train_loop(model, loader, optimizer, detector_loss, device, cfg.optim.epochs, output_dir, "detector_last.pt")
+    return model, stats
 
 
-def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TopDownPoseCNN, list[float]]:
+def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TopDownPoseCNN, dict[str, float | list[float]]]:
     model, device = build_pose_model(cfg)
     if weights:
         payload = torch.load(weights, map_location="cpu")
@@ -49,5 +49,5 @@ def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "")
     dataset = PoseDataset(cfg.dataset, cfg.augmentation, train=True)
     loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)
-    history = train_loop(model, loader, optimizer, pose_loss, device, cfg.optim.epochs, output_dir, "pose_last.pt")
-    return model, history
+    stats = train_loop(model, loader, optimizer, pose_loss, device, cfg.optim.epochs, output_dir, "pose_last.pt")
+    return model, stats

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class BackboneSpec:
     name: str
+    family: str
     width_mult: float
     block_type: str
     stem_channels: int
@@ -14,21 +15,31 @@ class BackboneSpec:
 
 
 MODEL_SPECS: dict[str, BackboneSpec] = {
-    "dsconv_xs": BackboneSpec("dsconv_xs", 0.50, "dsconv", 16, 64, (96, 72, 48)),
-    "dsconv_s": BackboneSpec("dsconv_s", 0.75, "dsconv", 20, 80, (128, 96, 64)),
-    "dsconv_m": BackboneSpec("dsconv_m", 1.00, "dsconv", 24, 96, (160, 128, 80)),
-    "dsconv_l": BackboneSpec("dsconv_l", 1.25, "dsconv", 28, 112, (192, 144, 96)),
-    "dsconv_xl": BackboneSpec("dsconv_xl", 1.50, "dsconv", 32, 128, (224, 160, 112)),
-    "resds_xs": BackboneSpec("resds_xs", 0.50, "residual", 16, 72, (112, 80, 56)),
-    "resds_s": BackboneSpec("resds_s", 0.75, "residual", 20, 88, (144, 104, 72)),
-    "resds_m": BackboneSpec("resds_m", 1.00, "residual", 24, 104, (176, 128, 88)),
-    "resds_l": BackboneSpec("resds_l", 1.25, "residual", 28, 120, (208, 152, 104)),
-    "resds_xl": BackboneSpec("resds_xl", 1.50, "residual", 32, 136, (240, 176, 120)),
+    "dsconv_xs": BackboneSpec("dsconv_xs", "flex", 0.50, "dsconv", 16, 64, (96, 72, 48)),
+    "dsconv_s": BackboneSpec("dsconv_s", "flex", 0.75, "dsconv", 20, 80, (128, 96, 64)),
+    "dsconv_m": BackboneSpec("dsconv_m", "flex", 1.00, "dsconv", 24, 96, (160, 128, 80)),
+    "dsconv_l": BackboneSpec("dsconv_l", "flex", 1.25, "dsconv", 28, 112, (192, 144, 96)),
+    "dsconv_xl": BackboneSpec("dsconv_xl", "flex", 1.50, "dsconv", 32, 128, (224, 160, 112)),
+    "resds_xs": BackboneSpec("resds_xs", "flex", 0.50, "residual", 16, 72, (112, 80, 56)),
+    "resds_s": BackboneSpec("resds_s", "flex", 0.75, "residual", 20, 88, (144, 104, 72)),
+    "resds_m": BackboneSpec("resds_m", "flex", 1.00, "residual", 24, 104, (176, 128, 88)),
+    "resds_l": BackboneSpec("resds_l", "flex", 1.25, "residual", 28, 120, (208, 152, 104)),
+    "resds_xl": BackboneSpec("resds_xl", "flex", 1.50, "residual", 32, 136, (240, 176, 120)),
+    "hrnet_w18_small": BackboneSpec("hrnet_w18_small", "hrnet", 0.75, "hrnet", 18, 96, (160, 128, 96)),
+    "hrnet_w18": BackboneSpec("hrnet_w18", "hrnet", 1.00, "hrnet", 18, 112, (192, 144, 112)),
+    "hrnet_w32": BackboneSpec("hrnet_w32", "hrnet", 1.50, "hrnet", 32, 144, (224, 176, 128)),
+    "unet_tiny": BackboneSpec("unet_tiny", "unet", 0.75, "unet", 16, 88, (144, 104, 72)),
+    "unet_small": BackboneSpec("unet_small", "unet", 1.00, "unet", 24, 104, (176, 128, 88)),
+    "hourglass_tiny": BackboneSpec("hourglass_tiny", "hourglass", 0.75, "hourglass", 16, 88, (144, 104, 72)),
+    "hourglass_small": BackboneSpec("hourglass_small", "hourglass", 1.00, "hourglass", 24, 104, (176, 128, 88)),
+    "fpn_tiny": BackboneSpec("fpn_tiny", "fpn", 0.75, "fpn", 16, 96, (144, 104, 72)),
+    "fpn_small": BackboneSpec("fpn_small", "fpn", 1.00, "fpn", 24, 112, (176, 128, 88)),
+    "csp_tiny": BackboneSpec("csp_tiny", "csp", 0.75, "csp", 16, 96, (144, 104, 72)),
 }
 
 
 def get_model_spec(name: str) -> BackboneSpec:
     if name not in MODEL_SPECS:
-        valid = ", ".join(sorted(MODEL_SPECS))
+        valid = ", ".join(MODEL_SPECS)
         raise KeyError(f"Unknown model '{name}'. Available models: {valid}")
     return MODEL_SPECS[name]
