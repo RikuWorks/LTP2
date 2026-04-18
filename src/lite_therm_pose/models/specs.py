@@ -35,7 +35,20 @@ MODEL_SPECS: dict[str, BackboneSpec] = {
     "fpn_tiny": BackboneSpec("fpn_tiny", "fpn", 0.75, "fpn", 16, 96, (144, 104, 72)),
     "fpn_small": BackboneSpec("fpn_small", "fpn", 1.00, "fpn", 24, 112, (176, 128, 88)),
     "csp_tiny": BackboneSpec("csp_tiny", "csp", 0.75, "csp", 16, 96, (144, 104, 72)),
+    "pose_resnet50": BackboneSpec("pose_resnet50", "resnet", 1.25, "bottleneck", 32, 144, (224, 176, 128)),
+    "pose_resnet101": BackboneSpec("pose_resnet101", "resnet", 1.50, "bottleneck", 40, 160, (256, 192, 144)),
+    "hrnet_w48": BackboneSpec("hrnet_w48", "hrnet", 2.00, "hrnet", 48, 176, (256, 208, 160)),
+    "higherhrnet_w32": BackboneSpec("higherhrnet_w32", "higherhrnet", 1.50, "higherhrnet", 32, 160, (240, 192, 144)),
+    "stacked_hourglass_large": BackboneSpec("stacked_hourglass_large", "hourglass", 1.50, "hourglass", 32, 144, (224, 176, 128)),
 }
+
+PAPER_GRADE_MODELS: list[str] = [
+    "pose_resnet50",
+    "pose_resnet101",
+    "hrnet_w48",
+    "higherhrnet_w32",
+    "stacked_hourglass_large",
+]
 
 
 def get_model_spec(name: str) -> BackboneSpec:

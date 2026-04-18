@@ -60,6 +60,22 @@ class CSPBlock(nn.Module):
         return self.fuse(torch.cat([self.left(x), self.right(x)], dim=1))
 
 
+class ResidualBottleneck(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        hidden = max(channels // 4, 16)
+        self.block = nn.Sequential(
+            conv_bn_relu(channels, hidden, kernel_size=1),
+            conv_bn_relu(hidden, hidden, kernel_size=3),
+            nn.Conv2d(hidden, channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(channels),
+        )
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.act(self.block(x) + x)
+
+
 class FlexibleBackbone(nn.Module):
     def __init__(self, spec: BackboneSpec, in_channels: int = 1) -> None:
         super().__init__()
@@ -67,10 +83,12 @@ class FlexibleBackbone(nn.Module):
         builder = {
             "flex": self._build_flex,
             "hrnet": self._build_hrnet,
+            "higherhrnet": self._build_higherhrnet,
             "unet": self._build_unet,
             "hourglass": self._build_hourglass,
             "fpn": self._build_fpn,
             "csp": self._build_csp,
+            "resnet": self._build_resnet,
         }[spec.family]
         builder(in_channels)
 
@@ -100,6 +118,21 @@ class FlexibleBackbone(nn.Module):
         self.high2 = nn.Sequential(conv_bn_relu(ch[2], ch[2]), ResidualDSConv(ch[2]))
         self.low2 = nn.Sequential(conv_bn_relu(ch[2], ch[3], stride=2), ResidualDSConv(ch[3]))
         self.fuse = conv_bn_relu(ch[2] + ch[3], ch[3], kernel_size=1)
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[2]
+
+    def _build_higherhrnet(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "higherhrnet"
+        self.stem = nn.Sequential(
+            conv_bn_relu(in_channels, ch[0], stride=2),
+            conv_bn_relu(ch[0], ch[1]),
+        )
+        self.branch1 = nn.Sequential(conv_bn_relu(ch[1], ch[1]), ResidualBottleneck(ch[1]))
+        self.branch2 = nn.Sequential(conv_bn_relu(ch[1], ch[2], stride=2), ResidualBottleneck(ch[2]))
+        self.branch3 = nn.Sequential(conv_bn_relu(ch[2], ch[3], stride=2), ResidualBottleneck(ch[3]))
+        self.fuse1 = conv_bn_relu(ch[1] + ch[2], ch[2], kernel_size=1)
+        self.fuse2 = conv_bn_relu(ch[2] + ch[3], ch[3], kernel_size=1)
         self.out_channels = ch[3]
         self.low_level_channels = ch[2]
 
@@ -150,6 +183,19 @@ class FlexibleBackbone(nn.Module):
         self.out_channels = ch[3]
         self.low_level_channels = ch[1]
 
+    def _build_resnet(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "resnet"
+        self.stem = nn.Sequential(
+            conv_bn_relu(in_channels, ch[0], stride=2),
+            conv_bn_relu(ch[0], ch[0]),
+        )
+        self.layer1 = nn.Sequential(conv_bn_relu(ch[0], ch[1], stride=2), ResidualBottleneck(ch[1]), ResidualBottleneck(ch[1]))
+        self.layer2 = nn.Sequential(conv_bn_relu(ch[1], ch[2], stride=2), ResidualBottleneck(ch[2]), ResidualBottleneck(ch[2]))
+        self.layer3 = nn.Sequential(conv_bn_relu(ch[2], ch[3], stride=2), ResidualBottleneck(ch[3]), ResidualBottleneck(ch[3]))
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[1]
+
     def _make_stage(self, in_channels: int, out_channels: int, block_type: str) -> nn.Sequential:
         layers: list[nn.Module] = [
             DepthwiseSeparableConv(in_channels, in_channels),
@@ -177,6 +223,16 @@ class FlexibleBackbone(nn.Module):
             low2_up = F.interpolate(low2, size=high2.shape[-2:], mode="bilinear", align_corners=False)
             out = self.fuse(torch.cat([high2, low2_up], dim=1))
             return out, high2
+        if self.mode == "higherhrnet":
+            x = self.stem(x)
+            b1 = self.branch1(x)
+            b2 = self.branch2(x)
+            b2_up = F.interpolate(b2, size=b1.shape[-2:], mode="bilinear", align_corners=False)
+            f1 = self.fuse1(torch.cat([b1, b2_up], dim=1))
+            b3 = self.branch3(b2)
+            b3_up = F.interpolate(b3, size=f1.shape[-2:], mode="bilinear", align_corners=False)
+            out = self.fuse2(torch.cat([f1, b3_up], dim=1))
+            return out, f1
         if self.mode == "unet":
             e1 = self.enc1(x)
             e2 = self.enc2(e1)
@@ -202,6 +258,12 @@ class FlexibleBackbone(nn.Module):
             p3 = self.l3(c3) + F.interpolate(p4, size=c3.shape[-2:], mode="nearest")
             out = self.out_proj(p3)
             return out, p3
+        if self.mode == "resnet":
+            x = self.stem(x)
+            low = self.layer1(x)
+            x = self.layer2(low)
+            x = self.layer3(x)
+            return x, low
         s = self.stem(x)
         low = self.stage1(s)
         x = self.stage2(low)

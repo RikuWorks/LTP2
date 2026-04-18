@@ -257,3 +257,28 @@ RTX 3090 x2 の正常な環境なら、少なくとも次のようになりま�
 - `pose_fine_train_seconds`
 - `det_epoch_seconds_mean`
 - `pose_epoch_seconds_mean`
+
+## 論文級精度を狙う 5 モデル
+
+精度重視で回すための 5 モデルセットも追加しています。
+
+- `pose_resnet50`
+- `pose_resnet101`
+- `hrnet_w48`
+- `higherhrnet_w32`
+- `stacked_hourglass_large`
+
+これらは軽量性よりも表現力を優先した構成です。既存の軽量 20 モデル群とは別に、
+高精度候補だけをまとめて実験できます。
+
+専用一括実験:
+
+```bash
+python run_paper_grade_suite.py \
+  --pretrain-config configs/coco_pretrain.yaml \
+  --finetune-config configs/openthermalpose2_finetune.yaml \
+  --output outputs/paper_grade_suite
+```
+
+この 5 モデル専用の実験も、設定で `detector_device: cuda:0` と `pose_device: cuda:1` が分かれていれば、
+各モデルごとの `pretrain` / `finetune` で 2 GPU を同時活用します。
