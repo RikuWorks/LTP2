@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from lite_therm_pose.models.backbone import MODEL_SPECS
+from lite_therm_pose.models.specs import MODEL_SPECS
 
 
 def main() -> None:

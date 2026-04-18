@@ -1,5 +1,7 @@
 name: lite-therm-pose
 channels:
+  - pytorch
+  - nvidia
   - conda-forge
 dependencies:
   - python=3.10
@@ -10,5 +12,3 @@ dependencies:
   - pillow>=10
   - pyyaml>=6
   - tqdm>=4.66
-  - pip:
-      - -e .

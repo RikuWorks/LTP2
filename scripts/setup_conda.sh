@@ -5,7 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/environment.yml"
 ENV_NAME="${CONDA_ENV_NAME:-lite-therm-pose}"
 CPU_ONLY="${CPU_ONLY:-0}"
-CUDA_VERSION="${CUDA_VERSION:-12.1}"
+CUDA_VERSION="${CUDA_VERSION:-12.4}"
+PYTORCH_VERSION="${PYTORCH_VERSION:-2.5.0}"
+TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.20.0}"
 
 usage() {
   cat <<'EOF'
@@ -13,15 +15,17 @@ Usage:
   ./scripts/setup_conda.sh
 
 Optional environment variables:
-  CONDA_ENV_NAME   Override the conda environment name
-  CPU_ONLY         Set to 1 to create a CPU-only environment instead of CUDA
-  CUDA_VERSION     CUDA runtime version for PyTorch packages (default: 12.1)
+  CONDA_ENV_NAME       Override the conda environment name
+  CPU_ONLY             Set to 1 to create a CPU-only environment instead of CUDA
+  CUDA_VERSION         CUDA runtime version for PyTorch packages (default: 12.4)
+  PYTORCH_VERSION      PyTorch version to install (default: 2.5.0)
+  TORCHVISION_VERSION  Torchvision version to install (default: 0.20.0)
 
 Examples:
   ./scripts/setup_conda.sh
   CONDA_ENV_NAME=thermal-pose ./scripts/setup_conda.sh
   CPU_ONLY=1 ./scripts/setup_conda.sh
-  CUDA_VERSION=12.1 ./scripts/setup_conda.sh
+  CUDA_VERSION=12.4 ./scripts/setup_conda.sh
 EOF
 }
 
@@ -32,10 +36,6 @@ log() {
 fail() {
   printf '[LiteThermPose][ERROR] %s\n' "$*" >&2
   exit 1
-}
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
 find_conda() {
@@ -60,7 +60,7 @@ find_conda() {
     fi
   done
 
-  fail "conda が見つかりません。Ubuntu なら Anaconda/Miniconda を入れ、PATH を通すか ~/miniconda3/bin/conda のような一般的な場所に配置してください。"
+  fail "conda was not found. Install Anaconda or Miniconda and make sure conda is on PATH."
 }
 
 main() {
@@ -78,33 +78,37 @@ main() {
   esac
 
   [[ -f "$ENV_FILE" ]] || fail "environment file not found: $ENV_FILE"
-  CONDA_EXE="$(find_conda)"
+  local conda_exe
+  conda_exe="$(find_conda)"
 
   log "creating or updating conda environment: ${ENV_NAME}"
-  "$CONDA_EXE" env remove -n "$ENV_NAME" -y >/dev/null 2>&1 || true
-  "$CONDA_EXE" env create -n "$ENV_NAME" -f "$ENV_FILE"
+  "$conda_exe" env remove -n "$ENV_NAME" -y >/dev/null 2>&1 || true
+  "$conda_exe" env create -n "$ENV_NAME" -f "$ENV_FILE"
+
+  log "removing conflicting pip torch packages if present"
+  "$conda_exe" run -n "$ENV_NAME" python -m pip uninstall -y torch torchvision torchaudio >/dev/null 2>&1 || true
 
   if [[ "$CPU_ONLY" == "1" ]]; then
-    "$CONDA_EXE" install -n "$ENV_NAME" -y \
-      "pytorch>=2.2" \
-      "torchvision>=0.17" \
+    "$conda_exe" install -n "$ENV_NAME" -y \
+      "pytorch=${PYTORCH_VERSION}" \
+      "torchvision=${TORCHVISION_VERSION}" \
       "cpuonly" \
       -c pytorch -c conda-forge
   else
-    "$CONDA_EXE" install -n "$ENV_NAME" -y \
-      "pytorch>=2.2" \
-      "torchvision>=0.17" \
+    "$conda_exe" install -n "$ENV_NAME" -y \
+      "pytorch=${PYTORCH_VERSION}" \
+      "torchvision=${TORCHVISION_VERSION}" \
       "pytorch-cuda=${CUDA_VERSION}" \
       -c pytorch -c nvidia
   fi
 
-  "$CONDA_EXE" run -n "$ENV_NAME" pip install -e "$ROOT_DIR"
+  "$conda_exe" run -n "$ENV_NAME" python -m pip install --no-deps -e "$ROOT_DIR"
 
   log "verifying torch CUDA availability"
-  "$CONDA_EXE" run -n "$ENV_NAME" python "${ROOT_DIR}/scripts/verify_gpu.py" || true
+  "$conda_exe" run -n "$ENV_NAME" python "${ROOT_DIR}/scripts/verify_gpu.py" || true
 
-  log "activating environment instructions:"
-  printf '  source "$(dirname "%s")/../etc/profile.d/conda.sh"\n' "$CONDA_EXE"
+  log "activation instructions:"
+  printf '  source "$(dirname "%s")/../etc/profile.d/conda.sh"\n' "$conda_exe"
   printf '  conda activate %s\n' "$ENV_NAME"
   printf '  python scripts/verify_gpu.py\n'
   printf '  python train_detector.py --config configs/coco_pretrain.yaml --output outputs/coco_detector\n'

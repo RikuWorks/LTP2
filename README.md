@@ -1,22 +1,22 @@
 # LiteThermPose
 
-Thermal top-down pose estimation project with:
+サーマル画像向けの Top-Down 姿勢推定プロジェクトです。以下の機能を含みます。
 
-- strict grayscale preprocessing for thermal images
-- custom lightweight CNN person detector
-- 17-keypoint pose estimation with visibility-aware supervision
-- model zoo with around 10 lightweight variants
-- COCO pretraining and OpenThermalPose2 finetuning
-- detector-only / pose-only / joint pipeline evaluation
-- experiment suite that runs pretrain -> finetune -> test -> report
+- サーマル画像を厳密に白黒化して扱う前処理
+- 軽量 CNN ベースの自作人物検出器
+- 17 キーポイント + 可視性情報を考慮した姿勢推定
+- 10 種類前後の軽量モデル切り替え
+- COCO 事前学習 + OpenThermalPose2 ファインチューニング
+- 人検出のみ / 骨格推定のみ / 結合パイプラインの個別評価
+- `pretrain -> finetune -> test -> report` をまとめて実行する一括実験
 
-## Setup
+## セットアップ
 
 ```bash
 pip install -e .
 ```
 
-For Ubuntu with Conda:
+## Ubuntu + Conda 環境構築
 
 ```bash
 chmod +x scripts/setup_conda.sh
@@ -26,24 +26,35 @@ conda activate lite-therm-pose
 python scripts/verify_gpu.py
 ```
 
-## Datasets
+RTX 3090 x2 環境では、デフォルトで Conda 版 PyTorch + CUDA 12.4 を使うようにしてあります。  
+この環境では `pip install torch torchvision` のような入れ方はしないでください。
 
-Download datasets with:
+既存環境が壊れている場合は、次で修復できます。
+
+```bash
+chmod +x scripts/repair_torch_conda.sh
+./scripts/repair_torch_conda.sh
+```
+
+## データセット取得
 
 ```bash
 chmod +x scripts/download_datasets.sh
 ./scripts/download_datasets.sh all
 ```
 
-Increase download parallelism when needed:
+ダウンロード並列数を増やしたい場合:
 
 ```bash
 DOWNLOAD_JOBS=16 DOWNLOAD_SPLITS=16 ./scripts/download_datasets.sh all
 ```
 
-If `aria2c` is installed, the downloader uses split parallel connections per file. Otherwise it falls back to `wget` or `curl`.
+- `DOWNLOAD_JOBS`: 同時ダウンロード数
+- `DOWNLOAD_SPLITS`: 1ファイルあたりの分割接続数
+- `aria2c` がある場合は分割並列ダウンロードを優先使用
+- ない場合は `wget` または `curl` にフォールバック
 
-Expected layout:
+想定ディレクトリ構成:
 
 - `data/coco/train2017`
 - `data/coco/val2017`
@@ -53,17 +64,17 @@ Expected layout:
 - `data/openthermalpose2/annotations/train.json`
 - `data/openthermalpose2/annotations/val.json`
 
-OpenThermalPose2 annotations are expected to be COCO-like. Optional `body_parts` fields are supported for partial detection supervision.
+OpenThermalPose2 の注釈は COCO 互換を想定しています。`body_parts` を含めると部分検出学習にも使えます。
 
-## Model Zoo
+## モデル一覧
 
-List supported models:
+利用可能なモデル一覧:
 
 ```bash
 python list_models.py
 ```
 
-Current variants:
+現在のモデル:
 
 - `dsconv_xs`
 - `dsconv_s`
@@ -76,32 +87,32 @@ Current variants:
 - `resds_l`
 - `resds_xl`
 
-## Train One Model
+## 単体学習
 
-Detector pretraining:
+人物検出器の事前学習:
 
 ```bash
 python train_detector.py --config configs/coco_pretrain.yaml --model dsconv_s --output outputs/coco_detector_dsconv_s
 ```
 
-Pose finetuning:
+姿勢推定器のファインチューニング:
 
 ```bash
 python train_pose.py --config configs/openthermalpose2_finetune.yaml --model dsconv_s --output outputs/thermal_pose_dsconv_s
 ```
 
-## Run Full Suite
+## 全モデル一括実験
 
-This runs all requested models through:
+次をモデルごとにまとめて実行します。
 
-1. detector pretraining
-2. pose pretraining
-3. detector finetuning
-4. pose finetuning
-5. detector-only test
-6. pose-only test
-7. joint pipeline test
-8. CSV / Markdown / PNG summary export
+1. 人物検出器の事前学習
+2. 姿勢推定器の事前学習
+3. 人物検出器のファインチューニング
+4. 姿勢推定器のファインチューニング
+5. 人検出のみテスト
+6. 骨格推定のみテスト
+7. 結合パイプラインテスト
+8. CSV / Markdown / PNG レポート出力
 
 ```bash
 python run_model_suite.py \
@@ -110,7 +121,7 @@ python run_model_suite.py \
   --output outputs/model_suite
 ```
 
-Run a subset only:
+一部モデルだけ回す場合:
 
 ```bash
 python run_model_suite.py \
@@ -120,7 +131,7 @@ python run_model_suite.py \
   --output outputs/model_suite_subset
 ```
 
-## Evaluate Existing Weights
+## 学習済み重みの評価
 
 ```bash
 python evaluate_models.py \
@@ -130,7 +141,7 @@ python evaluate_models.py \
   --pose-weights outputs/thermal_pose/pose_last.pt
 ```
 
-## Realtime Inference
+## リアルタイム推論
 
 ```bash
 python infer_realtime.py \
@@ -141,9 +152,9 @@ python infer_realtime.py \
   --source 0
 ```
 
-## Multi-GPU
+## マルチ GPU
 
-Use separate GPUs for detector and pose in config files:
+設定ファイルで検出器と姿勢推定器を別 GPU に分けられます。
 
 ```yaml
 runtime:
@@ -152,15 +163,22 @@ runtime:
   pose_device: cuda:1
 ```
 
-## Reports
+`scripts/verify_gpu.py` では見えている全 CUDA デバイスを表示します。  
+RTX 3090 x2 の正常な環境なら、少なくとも次のようになります。
 
-`run_model_suite.py` writes:
+- `device_count: 2`
+- `device_0: NVIDIA GeForce RTX 3090`
+- `device_1: NVIDIA GeForce RTX 3090`
+
+## 出力レポート
+
+`run_model_suite.py` は以下を出力します。
 
 - `summary.csv`
 - `summary.md`
 - `summary.png`
 
-Typical metrics:
+主な指標:
 
 - `det_recall50`
 - `det_mean_iou`
