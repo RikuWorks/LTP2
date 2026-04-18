@@ -35,6 +35,14 @@ chmod +x scripts/download_datasets.sh
 ./scripts/download_datasets.sh all
 ```
 
+Increase download parallelism when needed:
+
+```bash
+DOWNLOAD_JOBS=16 DOWNLOAD_SPLITS=16 ./scripts/download_datasets.sh all
+```
+
+If `aria2c` is installed, the downloader uses split parallel connections per file. Otherwise it falls back to `wget` or `curl`.
+
 Expected layout:
 
 - `data/coco/train2017`

@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${ROOT_DIR}/data"
 RAW_DIR="${DATA_DIR}/raw"
+DOWNLOAD_JOBS="${DOWNLOAD_JOBS:-8}"
+DOWNLOAD_SPLITS="${DOWNLOAD_SPLITS:-8}"
 
 COCO_TRAIN_URL="http://images.cocodataset.org/zips/train2017.zip"
 COCO_VAL_URL="http://images.cocodataset.org/zips/val2017.zip"
@@ -19,10 +21,13 @@ Usage:
 
 Environment variables:
   DATA_DIR_OVERRIDE   Override dataset output directory
+  DOWNLOAD_JOBS       Number of parallel download workers (default: 8)
+  DOWNLOAD_SPLITS     Number of split connections per file when aria2c is available (default: 8)
   CURL_OPTS           Extra options passed to curl
 
 Examples:
   ./scripts/download_datasets.sh all
+  DOWNLOAD_JOBS=16 DOWNLOAD_SPLITS=16 ./scripts/download_datasets.sh coco
   DATA_DIR_OVERRIDE=/mnt/datasets ./scripts/download_datasets.sh coco
 EOF
 }
@@ -48,16 +53,51 @@ download_file() {
     return
   fi
   mkdir -p "$(dirname "$out")"
-  if command -v curl >/dev/null 2>&1; then
+  if command -v aria2c >/dev/null 2>&1; then
+    log "downloading $(basename "$out") with aria2c (jobs=${DOWNLOAD_JOBS}, splits=${DOWNLOAD_SPLITS})"
+    aria2c \
+      --allow-overwrite=true \
+      --auto-file-renaming=false \
+      --continue=true \
+      --max-connection-per-server="${DOWNLOAD_SPLITS}" \
+      --split="${DOWNLOAD_SPLITS}" \
+      --min-split-size=1M \
+      --max-concurrent-downloads="${DOWNLOAD_JOBS}" \
+      --dir="$(dirname "$out")" \
+      --out="$(basename "$out")" \
+      "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    log "downloading $(basename "$out") with wget"
+    wget -O "$out" "$url"
+  elif command -v curl >/dev/null 2>&1; then
     log "downloading $(basename "$out")"
     # shellcheck disable=SC2086
     curl -L --fail ${CURL_OPTS:-} -o "$out" "$url"
-  elif command -v wget >/dev/null 2>&1; then
-    log "downloading $(basename "$out")"
-    wget -O "$out" "$url"
   else
-    fail "curl or wget is required"
+    fail "aria2c, curl, or wget is required"
   fi
+}
+
+run_jobs() {
+  local max_jobs="$1"
+  shift
+  local -a pids=()
+  local job_count=0
+  local cmd
+  for cmd in "$@"; do
+    bash -lc "$cmd" &
+    pids+=("$!")
+    job_count=$((job_count + 1))
+    if [[ "$job_count" -ge "$max_jobs" ]]; then
+      wait "${pids[0]}"
+      pids=("${pids[@]:1}")
+      job_count=$((job_count - 1))
+    fi
+  done
+  local pid
+  for pid in "${pids[@]}"; do
+    wait "$pid"
+  done
 }
 
 extract_zip() {
@@ -94,9 +134,10 @@ ensure_data_dir() {
 download_coco() {
   ensure_data_dir
   mkdir -p "${DATA_DIR}/coco" "${DATA_DIR}/coco/annotations"
-  download_file "$COCO_TRAIN_URL" "${RAW_DIR}/train2017.zip"
-  download_file "$COCO_VAL_URL" "${RAW_DIR}/val2017.zip"
-  download_file "$COCO_ANN_URL" "${RAW_DIR}/annotations_trainval2017.zip"
+  run_jobs "$DOWNLOAD_JOBS" \
+    "source \"${ROOT_DIR}/scripts/download_datasets.sh\"; download_file \"$COCO_TRAIN_URL\" \"${RAW_DIR}/train2017.zip\"" \
+    "source \"${ROOT_DIR}/scripts/download_datasets.sh\"; download_file \"$COCO_VAL_URL\" \"${RAW_DIR}/val2017.zip\"" \
+    "source \"${ROOT_DIR}/scripts/download_datasets.sh\"; download_file \"$COCO_ANN_URL\" \"${RAW_DIR}/annotations_trainval2017.zip\""
 
   if [[ ! -d "${DATA_DIR}/coco/train2017" ]]; then
     log "extracting COCO train2017"
@@ -193,4 +234,6 @@ main() {
   esac
 }
 
-main "${1:-}"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "${1:-}"
+fi
