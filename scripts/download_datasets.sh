@@ -158,10 +158,27 @@ normalize_openthermalpose2() {
   local target_root="${DATA_DIR}/openthermalpose2"
   local target_images="${target_root}/images"
   local target_annotations="${target_root}/annotations"
+  local otp2_root
   local image_probe
   local json_probe
 
   mkdir -p "$target_images" "$target_annotations"
+
+  otp2_root="$(find "$extracted_root" -type d -name 'otp2_dataset' | head -n 1 || true)"
+  if [[ -n "$otp2_root" ]] && command -v python3 >/dev/null 2>&1; then
+    log "detected YOLO-pose style OpenThermalPose2 dataset; converting to COCO JSON"
+    python3 "${ROOT_DIR}/scripts/convert_otp2_yolo_to_coco.py" --source "$otp2_root" --target "$target_root"
+    cat <<EOF
+
+[LiteThermPose] OpenThermalPose2 conversion finished.
+[LiteThermPose] Training paths:
+  images:      ${target_images}
+  annotations: ${target_annotations}/train.json
+  validation:  ${target_annotations}/val.json
+
+EOF
+    return
+  fi
 
   image_probe="$(find "$extracted_root" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) | head -n 1 || true)"
   json_probe="$(find "$extracted_root" -type f -iname '*.json' | head -n 1 || true)"
