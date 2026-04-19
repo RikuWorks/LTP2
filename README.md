@@ -115,6 +115,8 @@ python train_detector.py --config configs/coco_pretrain.yaml --model dsconv_s --
 python train_pose.py --config configs/openthermalpose2_finetune.yaml --model dsconv_s --output outputs/thermal_pose_dsconv_s
 ```
 
+同じ `output` ディレクトリに `detector_last.pt` または `pose_last.pt` がある場合は、自動で途中から再開します。
+
 ## 全モデル一括実験
 
 次をモデルごとにまとめて実行します。

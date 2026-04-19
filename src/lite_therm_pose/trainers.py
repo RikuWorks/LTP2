@@ -10,6 +10,7 @@ from .data import DetectorDataset, PoseDataset
 from .engine import make_loader, train_loop
 from .models.detector import TinyPersonDetector, detector_loss
 from .models.pose_topdown import TopDownPoseCNN, pose_loss
+from .resume import load_initial_weights_if_needed, try_resume_training
 from .runtime import resolve_model_device
 
 
@@ -32,23 +33,51 @@ def build_pose_model(cfg: ExperimentConfig) -> tuple[TopDownPoseCNN, torch.devic
 
 def train_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TinyPersonDetector, dict[str, float | list[float]]]:
     model, device = build_detector(cfg)
-    if weights:
-        load_flexible_state_dict(model, str(weights))
     dataset = DetectorDataset(cfg.dataset, cfg.detector, cfg.augmentation)
     loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)
-    stats = train_loop(model, loader, optimizer, detector_loss, device, cfg.optim.epochs, output_dir, "detector_last.pt")
+    resume_info = try_resume_training(model, optimizer, output_dir, "detector_last.pt")
+    warm_started = False
+    if not resume_info["resumed"]:
+        warm_started = load_initial_weights_if_needed(model, str(weights))
+    stats = train_loop(
+        model,
+        loader,
+        optimizer,
+        detector_loss,
+        device,
+        cfg.optim.epochs,
+        output_dir,
+        "detector_last.pt",
+        start_epoch=int(resume_info["start_epoch"]),
+    )
+    stats["auto_resumed"] = bool(resume_info["resumed"])
+    stats["warm_started"] = warm_started
     return model, stats
 
 
 def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TopDownPoseCNN, dict[str, float | list[float]]]:
     model, device = build_pose_model(cfg)
-    if weights:
-        load_flexible_state_dict(model, str(weights))
     dataset = PoseDataset(cfg.dataset, cfg.augmentation, train=True)
     loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)
-    stats = train_loop(model, loader, optimizer, pose_loss, device, cfg.optim.epochs, output_dir, "pose_last.pt")
+    resume_info = try_resume_training(model, optimizer, output_dir, "pose_last.pt")
+    warm_started = False
+    if not resume_info["resumed"]:
+        warm_started = load_initial_weights_if_needed(model, str(weights))
+    stats = train_loop(
+        model,
+        loader,
+        optimizer,
+        pose_loss,
+        device,
+        cfg.optim.epochs,
+        output_dir,
+        "pose_last.pt",
+        start_epoch=int(resume_info["start_epoch"]),
+    )
+    stats["auto_resumed"] = bool(resume_info["resumed"])
+    stats["warm_started"] = warm_started
     return model, stats
 
 

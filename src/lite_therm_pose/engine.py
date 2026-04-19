@@ -40,13 +40,23 @@ def train_loop(
     epochs: int,
     output_dir: str | Path,
     checkpoint_name: str,
+    start_epoch: int = 0,
 ) -> dict[str, float | list[float]]:
     model.train()
     history: list[float] = []
     epoch_times: list[float] = []
     peak_memory = 0.0
     total_start = time.perf_counter()
-    for epoch in range(1, epochs + 1):
+    if start_epoch >= epochs:
+        return {
+            "loss_history": history,
+            "epoch_seconds_mean": 0.0,
+            "train_seconds_total": 0.0,
+            "train_peak_memory_mb": 0.0,
+            "resumed_from_epoch": start_epoch,
+            "completed_epochs": start_epoch,
+        }
+    for epoch in range(start_epoch + 1, epochs + 1):
         reset_peak_memory(device)
         epoch_start = time.perf_counter()
         running_loss = 0.0
@@ -70,4 +80,6 @@ def train_loop(
         "epoch_seconds_mean": sum(epoch_times) / max(len(epoch_times), 1),
         "train_seconds_total": total_seconds,
         "train_peak_memory_mb": peak_memory,
+        "resumed_from_epoch": start_epoch,
+        "completed_epochs": epochs,
     }
