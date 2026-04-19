@@ -82,6 +82,8 @@ python list_models.py
 - `dsconv_m`
 - `dsconv_l`
 - `dsconv_xl`
+- `dsconv_nano`
+- `dsconv_pico`
 - `resds_xs`
 - `resds_s`
 - `resds_m`
@@ -96,6 +98,7 @@ python list_models.py
 - `hourglass_small`
 - `fpn_tiny`
 - `fpn_small`
+- `csp_pico`
 - `csp_tiny`
 
 ## 単体学習
@@ -283,3 +286,22 @@ python run_paper_grade_suite.py \
 
 この 5 モデル専用の実験も、設定で `detector_device: cuda:0` と `pose_device: cuda:1` が分かれていれば、
 各モデルごとの `pretrain` / `finetune` で 2 GPU を同時活用します。
+
+## 超軽量 3 モデル
+
+軽さと CPU / 低 VRAM 実行を優先した 3 モデルも追加しています。
+
+- `dsconv_nano`
+- `dsconv_pico`
+- `csp_pico`
+
+専用一括実験:
+
+```bash
+python run_ultralight_suite.py \
+  --pretrain-config configs/coco_pretrain.yaml \
+  --finetune-config configs/openthermalpose2_finetune.yaml \
+  --output outputs/ultralight_suite
+```
+
+この 3 モデルは、既存の軽量群よりさらに小さい構成で、CPU 側の実行速度や VRAM 使用量を抑えたいときの候補です。
