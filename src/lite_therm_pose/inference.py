@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import torch
 
+from .checkpoints import load_flexible_state_dict
 from .config import DatasetConfig, DetectorConfig
 from .models.detector import TinyPersonDetector, decode_detections
 from .models.pose_topdown import TopDownPoseCNN, decode_pose
@@ -23,9 +24,7 @@ class RuntimeBundle:
 
 
 def load_weights(model: torch.nn.Module, checkpoint_path: str) -> None:
-    payload = torch.load(checkpoint_path, map_location="cpu")
-    state = payload["model"] if "model" in payload else payload
-    model.load_state_dict(state)
+    load_flexible_state_dict(model, checkpoint_path)
 
 
 @torch.no_grad()

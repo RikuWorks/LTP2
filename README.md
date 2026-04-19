@@ -65,6 +65,7 @@ DOWNLOAD_JOBS=16 DOWNLOAD_SPLITS=16 ./scripts/download_datasets.sh all
 - `data/openthermalpose2/annotations/val.json`
 
 OpenThermalPose2 の注釈は COCO 互換を想定しています。`body_parts` を含めると部分検出学習にも使えます。
+COCO 事前学習時も、サーマル向けに合わせて入力画像は白黒化して学習します。
 
 ## モデル一覧
 

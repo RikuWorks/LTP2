@@ -6,7 +6,7 @@ dataset:
   image_size: [256, 192]
   heatmap_size: [64, 48]
   num_keypoints: 17
-  grayscale: false
+  grayscale: true
 model:
   name: dsconv_s
 optim:

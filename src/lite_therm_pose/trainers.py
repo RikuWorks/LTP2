@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 
+from .checkpoints import load_flexible_state_dict
 from .config import ExperimentConfig
 from .data import DetectorDataset, PoseDataset
 from .engine import make_loader, train_loop
@@ -32,8 +33,7 @@ def build_pose_model(cfg: ExperimentConfig) -> tuple[TopDownPoseCNN, torch.devic
 def train_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TinyPersonDetector, dict[str, float | list[float]]]:
     model, device = build_detector(cfg)
     if weights:
-        payload = torch.load(weights, map_location="cpu")
-        model.load_state_dict(payload["model"] if "model" in payload else payload, strict=False)
+        load_flexible_state_dict(model, str(weights))
     dataset = DetectorDataset(cfg.dataset, cfg.detector, cfg.augmentation)
     loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)
@@ -44,8 +44,7 @@ def train_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str =
 def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TopDownPoseCNN, dict[str, float | list[float]]]:
     model, device = build_pose_model(cfg)
     if weights:
-        payload = torch.load(weights, map_location="cpu")
-        model.load_state_dict(payload["model"] if "model" in payload else payload, strict=False)
+        load_flexible_state_dict(model, str(weights))
     dataset = PoseDataset(cfg.dataset, cfg.augmentation, train=True)
     loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay)
@@ -55,13 +54,11 @@ def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "")
 
 def load_trained_detector(cfg: ExperimentConfig, checkpoint_path: str | Path) -> TinyPersonDetector:
     model, _ = build_detector(cfg)
-    payload = torch.load(checkpoint_path, map_location="cpu")
-    model.load_state_dict(payload["model"] if "model" in payload else payload, strict=False)
+    load_flexible_state_dict(model, str(checkpoint_path))
     return model
 
 
 def load_trained_pose(cfg: ExperimentConfig, checkpoint_path: str | Path) -> TopDownPoseCNN:
     model, _ = build_pose_model(cfg)
-    payload = torch.load(checkpoint_path, map_location="cpu")
-    model.load_state_dict(payload["model"] if "model" in payload else payload, strict=False)
+    load_flexible_state_dict(model, str(checkpoint_path))
     return model
