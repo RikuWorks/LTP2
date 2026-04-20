@@ -42,6 +42,7 @@ MODEL_SPECS: dict[str, BackboneSpec] = {
     "pose_resnet101": BackboneSpec("pose_resnet101", "resnet", 1.50, "bottleneck", 40, 160, (256, 192, 144)),
     "hrnet_w48": BackboneSpec("hrnet_w48", "hrnet", 2.00, "hrnet", 48, 176, (256, 208, 160)),
     "higherhrnet_w32": BackboneSpec("higherhrnet_w32", "higherhrnet", 1.50, "higherhrnet", 32, 160, (240, 192, 144)),
+    "thermhr_csp_bifpn": BackboneSpec("thermhr_csp_bifpn", "thermhybrid", 1.10, "thermhybrid", 24, 136, (208, 152, 104)),
     "stacked_hourglass_large": BackboneSpec("stacked_hourglass_large", "hourglass", 1.50, "hourglass", 32, 144, (224, 176, 128)),
 }
 
@@ -50,6 +51,7 @@ PAPER_GRADE_MODELS: list[str] = [
     "pose_resnet101",
     "hrnet_w48",
     "higherhrnet_w32",
+    "thermhr_csp_bifpn",
     "stacked_hourglass_large",
 ]
 

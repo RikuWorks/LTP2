@@ -307,3 +307,24 @@ python run_ultralight_suite.py \
 ```
 
 この 3 モデルは、既存の軽量群よりさらに小さい構成で、CPU 側の実行速度や VRAM 使用量を抑えたいときの候補です。
+
+## Paper Grade Suite Update
+
+`run_paper_grade_suite.py` は 6 モデル構成になりました。
+
+- `pose_resnet50`
+- `pose_resnet101`
+- `hrnet_w48`
+- `higherhrnet_w32`
+- `thermhr_csp_bifpn`
+- `stacked_hourglass_large`
+
+追加した `thermhr_csp_bifpn` は、サーマル画像向けに
+
+- 高解像度分岐
+- CSP 系の軽量融合
+- BiFPN 風の双方向融合
+- チャネル注意
+
+を組み合わせたハイブリッド構成です。  
+既存の HRNet 系より少し軽くしつつ、細かい関節位置精度を落としすぎないことを狙っています。

@@ -7,7 +7,7 @@ from lite_therm_pose.models.specs import PAPER_GRADE_MODELS
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the 5 high-accuracy paper-grade model suite.")
+    parser = argparse.ArgumentParser(description="Run the 6 high-accuracy paper-grade model suite.")
     parser.add_argument("--pretrain-config", type=str, required=True)
     parser.add_argument("--finetune-config", type=str, required=True)
     parser.add_argument("--output", type=str, default="outputs/paper_grade_suite")

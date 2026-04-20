@@ -76,6 +76,22 @@ class ResidualBottleneck(nn.Module):
         return self.act(self.block(x) + x)
 
 
+class ChannelAttention(nn.Module):
+    def __init__(self, channels: int, reduction: int = 8) -> None:
+        super().__init__()
+        hidden = max(channels // reduction, 8)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Conv2d(channels, hidden, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden, channels, kernel_size=1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.fc(self.pool(x))
+
+
 class FlexibleBackbone(nn.Module):
     def __init__(self, spec: BackboneSpec, in_channels: int = 1) -> None:
         super().__init__()
@@ -84,6 +100,7 @@ class FlexibleBackbone(nn.Module):
             "flex": self._build_flex,
             "hrnet": self._build_hrnet,
             "higherhrnet": self._build_higherhrnet,
+            "thermhybrid": self._build_thermhybrid,
             "unet": self._build_unet,
             "hourglass": self._build_hourglass,
             "fpn": self._build_fpn,
@@ -135,6 +152,37 @@ class FlexibleBackbone(nn.Module):
         self.fuse2 = conv_bn_relu(ch[2] + ch[3], ch[3], kernel_size=1)
         self.out_channels = ch[3]
         self.low_level_channels = ch[2]
+
+    def _build_thermhybrid(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "thermhybrid"
+        self.stem = nn.Sequential(
+            conv_bn_relu(in_channels, ch[0], stride=2),
+            DepthwiseSeparableConv(ch[0], ch[1]),
+        )
+        self.high = nn.Sequential(
+            DepthwiseSeparableConv(ch[1], ch[1]),
+            CSPBlock(ch[1]),
+            ChannelAttention(ch[1]),
+        )
+        self.mid = nn.Sequential(
+            conv_bn_relu(ch[1], ch[2], stride=2),
+            CSPBlock(ch[2]),
+            ChannelAttention(ch[2]),
+        )
+        self.low = nn.Sequential(
+            conv_bn_relu(ch[2], ch[3], stride=2),
+            ResidualBottleneck(ch[3]),
+            ChannelAttention(ch[3]),
+        )
+        self.top_down = conv_bn_relu(ch[3] + ch[2], ch[2], kernel_size=1)
+        self.bottom_up = conv_bn_relu(ch[2] + ch[1], ch[3], kernel_size=1)
+        self.out_fuse = nn.Sequential(
+            conv_bn_relu(ch[3] + ch[2], ch[3], kernel_size=1),
+            ChannelAttention(ch[3]),
+        )
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[1]
 
     def _build_unet(self, in_channels: int) -> None:
         ch = self._channels()
@@ -233,6 +281,15 @@ class FlexibleBackbone(nn.Module):
             b3_up = F.interpolate(b3, size=f1.shape[-2:], mode="bilinear", align_corners=False)
             out = self.fuse2(torch.cat([f1, b3_up], dim=1))
             return out, f1
+        if self.mode == "thermhybrid":
+            x = self.stem(x)
+            high = self.high(x)
+            mid = self.mid(high)
+            low = self.low(mid)
+            td = self.top_down(torch.cat([F.interpolate(low, size=mid.shape[-2:], mode="bilinear", align_corners=False), mid], dim=1))
+            bu = self.bottom_up(torch.cat([F.interpolate(td, size=high.shape[-2:], mode="bilinear", align_corners=False), high], dim=1))
+            out = self.out_fuse(torch.cat([F.interpolate(bu, size=td.shape[-2:], mode="bilinear", align_corners=False), td], dim=1))
+            return out, high
         if self.mode == "unet":
             e1 = self.enc1(x)
             e2 = self.enc2(e1)
