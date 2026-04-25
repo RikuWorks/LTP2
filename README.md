@@ -328,3 +328,62 @@ python run_ultralight_suite.py \
 
 を組み合わせたハイブリッド構成です。  
 既存の HRNet 系より少し軽くしつつ、細かい関節位置精度を落としすぎないことを狙っています。
+## Paper Grade OOM 対策
+
+paper-grade 6 モデルは通常設定だと GPU メモリ不足になりやすいため、
+専用の低メモリ config を追加しています。
+
+- `configs/coco_pretrain_paper_grade.yaml`
+- `configs/openthermalpose2_finetune_paper_grade.yaml`
+
+推奨実行例:
+
+```bash
+python run_paper_grade_suite.py \
+  --pretrain-config configs/coco_pretrain_paper_grade.yaml \
+  --finetune-config configs/openthermalpose2_finetune_paper_grade.yaml \
+  --output outputs/paper_grade_suite
+```
+
+この設定では batch size を `8` に下げ、batch size に合わせて learning rate も
+安全側に調整しています。通常の 20 モデル実験には既存 config をそのまま使えます。
+
+## ResNet Plus Suite
+
+ResNet 系の改良版も追加しています。
+
+- `pose_resnet50_se`
+- `pose_resnet101_se`
+- `pose_resnet101_se_fuse`
+
+実行例:
+
+```bash
+python run_resnet_plus_suite.py \
+  --pretrain-config configs/coco_pretrain_paper_grade_fast.yaml \
+  --finetune-config configs/openthermalpose2_finetune_paper_grade_fast.yaml \
+  --output outputs/resnet_plus_suite
+```
+
+## Paper Grade 高速設定
+
+速度優先で paper-grade 6 モデルを回すための config も追加しています。
+
+- `configs/coco_pretrain_paper_grade_fast.yaml`
+- `configs/openthermalpose2_finetune_paper_grade_fast.yaml`
+
+この設定では以下を高速側に寄せています。
+
+- pose 入力を `256x192` から `224x160` に縮小
+- detector 入力を `320x320` から `256x256` に縮小
+- COCO pretrain を `24 epoch`
+- OpenThermalPose2 finetune を `30 epoch`
+
+速度優先の実行例:
+
+```bash
+python run_paper_grade_suite.py \
+  --pretrain-config configs/coco_pretrain_paper_grade_fast.yaml \
+  --finetune-config configs/openthermalpose2_finetune_paper_grade_fast.yaml \
+  --output outputs/paper_grade_suite_fast
+```

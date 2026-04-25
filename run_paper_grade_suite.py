@@ -17,6 +17,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     print("paper-grade models:", ",".join(PAPER_GRADE_MODELS))
+    if args.pretrain_config.endswith("configs/coco_pretrain.yaml") or args.finetune_config.endswith(
+        "configs/openthermalpose2_finetune.yaml"
+    ):
+        print(
+            "warning: standard configs selected. "
+            "For paper-grade models, configs/coco_pretrain_paper_grade.yaml and "
+            "configs/openthermalpose2_finetune_paper_grade.yaml are recommended to reduce OOM risk."
+        )
     rows = run_suite(args.pretrain_config, args.finetune_config, PAPER_GRADE_MODELS, args.output)
     for row in rows:
         print(row)

@@ -1,0 +1,26 @@
+dataset:
+  image_root: data/openthermalpose2/images
+  annotation_file: data/openthermalpose2/annotations/train.json
+  val_image_root: data/openthermalpose2/images
+  val_annotation_file: data/openthermalpose2/annotations/val.json
+  image_size: [224, 160]
+  heatmap_size: [56, 40]
+  num_keypoints: 17
+  grayscale: true
+  body_parts: [head, torso, left_arm, right_arm, left_leg, right_leg]
+model:
+  name: thermhr_csp_bifpn
+optim:
+  batch_size: 8
+  epochs: 30
+  lr: 0.00075
+  workers: 4
+augmentation:
+  partial_crop_prob: 0.35
+detector:
+  image_size: [256, 256]
+  score_threshold: 0.2
+runtime:
+  device: auto
+  detector_device: cuda:0
+  pose_device: cuda:1

@@ -1,0 +1,22 @@
+dataset:
+  image_root: data/coco/train2017
+  annotation_file: data/coco/annotations/person_keypoints_train2017.json
+  val_image_root: data/coco/val2017
+  val_annotation_file: data/coco/annotations/person_keypoints_val2017.json
+  image_size: [224, 160]
+  heatmap_size: [56, 40]
+  num_keypoints: 17
+  grayscale: true
+model:
+  name: thermhr_csp_bifpn
+optim:
+  batch_size: 8
+  epochs: 24
+  lr: 0.001
+  workers: 4
+detector:
+  image_size: [256, 256]
+runtime:
+  device: auto
+  detector_device: cuda:0
+  pose_device: cuda:1

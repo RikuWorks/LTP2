@@ -92,6 +92,23 @@ class ChannelAttention(nn.Module):
         return x * self.fc(self.pool(x))
 
 
+class SEResidualBottleneck(nn.Module):
+    def __init__(self, channels: int, reduction: int = 8) -> None:
+        super().__init__()
+        hidden = max(channels // 4, 16)
+        self.block = nn.Sequential(
+            conv_bn_relu(channels, hidden, kernel_size=1),
+            conv_bn_relu(hidden, hidden, kernel_size=3),
+            nn.Conv2d(hidden, channels, kernel_size=1, bias=False),
+            nn.BatchNorm2d(channels),
+        )
+        self.se = ChannelAttention(channels, reduction=reduction)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.act(self.se(self.block(x)) + x)
+
+
 class FlexibleBackbone(nn.Module):
     def __init__(self, spec: BackboneSpec, in_channels: int = 1) -> None:
         super().__init__()
@@ -106,6 +123,7 @@ class FlexibleBackbone(nn.Module):
             "fpn": self._build_fpn,
             "csp": self._build_csp,
             "resnet": self._build_resnet,
+            "seresnet": self._build_seresnet,
         }[spec.family]
         builder(in_channels)
 
@@ -244,6 +262,43 @@ class FlexibleBackbone(nn.Module):
         self.out_channels = ch[3]
         self.low_level_channels = ch[1]
 
+    def _build_seresnet(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "seresnet"
+        self.stem = nn.Sequential(
+            conv_bn_relu(in_channels, ch[0] // 2, stride=2),
+            conv_bn_relu(ch[0] // 2, ch[0]),
+            conv_bn_relu(ch[0], ch[0]),
+        )
+        self.layer1 = nn.Sequential(
+            conv_bn_relu(ch[0], ch[1], stride=2),
+            SEResidualBottleneck(ch[1]),
+            SEResidualBottleneck(ch[1]),
+        )
+        self.layer2 = nn.Sequential(
+            conv_bn_relu(ch[1], ch[2], stride=2),
+            SEResidualBottleneck(ch[2]),
+            SEResidualBottleneck(ch[2]),
+        )
+        self.layer3 = nn.Sequential(
+            conv_bn_relu(ch[2], ch[3], stride=2),
+            SEResidualBottleneck(ch[3]),
+            SEResidualBottleneck(ch[3]),
+            SEResidualBottleneck(ch[3]),
+        )
+        self.low_reduce = conv_bn_relu(ch[1], ch[1], kernel_size=1)
+        self.deep_reduce = conv_bn_relu(ch[3], ch[1], kernel_size=1)
+        self.low_refine = nn.Sequential(
+            conv_bn_relu(ch[1] * 2, ch[1], kernel_size=1),
+            SEResidualBottleneck(ch[1]),
+        )
+        self.out_refine = nn.Sequential(
+            conv_bn_relu(ch[3] + ch[2], ch[3], kernel_size=1),
+            SEResidualBottleneck(ch[3]),
+        )
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[1]
+
     def _make_stage(self, in_channels: int, out_channels: int, block_type: str) -> nn.Sequential:
         layers: list[nn.Module] = [
             DepthwiseSeparableConv(in_channels, in_channels),
@@ -321,6 +376,24 @@ class FlexibleBackbone(nn.Module):
             x = self.layer2(low)
             x = self.layer3(x)
             return x, low
+        if self.mode == "seresnet":
+            x = self.stem(x)
+            low = self.layer1(x)
+            mid = self.layer2(low)
+            high = self.layer3(mid)
+            low_fused = self.low_refine(
+                torch.cat(
+                    [
+                        self.low_reduce(low),
+                        F.interpolate(self.deep_reduce(high), size=low.shape[-2:], mode="bilinear", align_corners=False),
+                    ],
+                    dim=1,
+                )
+            )
+            out = self.out_refine(
+                torch.cat([high, F.interpolate(mid, size=high.shape[-2:], mode="bilinear", align_corners=False)], dim=1)
+            )
+            return out, low_fused
         s = self.stem(x)
         low = self.stage1(s)
         x = self.stage2(low)
