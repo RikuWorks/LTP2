@@ -43,6 +43,9 @@ MODEL_SPECS: dict[str, BackboneSpec] = {
     "pose_resnet50_se": BackboneSpec("pose_resnet50_se", "seresnet", 1.25, "se_bottleneck", 32, 152, (232, 184, 136)),
     "pose_resnet101_se": BackboneSpec("pose_resnet101_se", "seresnet", 1.50, "se_bottleneck", 40, 168, (264, 200, 152)),
     "pose_resnet101_se_fuse": BackboneSpec("pose_resnet101_se_fuse", "seresnet", 1.60, "se_bottleneck", 40, 176, (272, 208, 160)),
+    "pose_resnet50_se_thermal": BackboneSpec("pose_resnet50_se_thermal", "thermresnet", 1.30, "thermal_se", 32, 160, (240, 192, 144)),
+    "pose_resnet101_se_thermal": BackboneSpec("pose_resnet101_se_thermal", "thermresnet", 1.55, "thermal_se", 40, 176, (272, 208, 160)),
+    "pose_resnet101_se_thermal_ppm": BackboneSpec("pose_resnet101_se_thermal_ppm", "thermresnet", 1.65, "thermal_se", 40, 184, (280, 216, 168)),
     "hrnet_w48": BackboneSpec("hrnet_w48", "hrnet", 2.00, "hrnet", 48, 176, (256, 208, 160)),
     "higherhrnet_w32": BackboneSpec("higherhrnet_w32", "higherhrnet", 1.50, "higherhrnet", 32, 160, (240, 192, 144)),
     "thermhr_csp_bifpn": BackboneSpec("thermhr_csp_bifpn", "thermhybrid", 1.10, "thermhybrid", 24, 136, (208, 152, 104)),
@@ -64,6 +67,13 @@ RESNET_PLUS_MODELS: list[str] = [
     "pose_resnet50_se",
     "pose_resnet101_se",
     "pose_resnet101_se_fuse",
+]
+
+RESNET_NOVEL_MODELS: list[str] = [
+    "pose_resnet101_se",
+    "pose_resnet50_se_thermal",
+    "pose_resnet101_se_thermal",
+    "pose_resnet101_se_thermal_ppm",
 ]
 
 ULTRALIGHT_MODELS: list[str] = [

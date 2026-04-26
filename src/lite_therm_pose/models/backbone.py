@@ -109,6 +109,62 @@ class SEResidualBottleneck(nn.Module):
         return self.act(self.se(self.block(x)) + x)
 
 
+class SpatialContrastGate(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.project = nn.Sequential(
+            nn.Conv2d(3, 1, kernel_size=5, padding=2, bias=False),
+            nn.Sigmoid(),
+        )
+        self.refine = conv_bn_relu(channels, channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        avg_map = torch.mean(x, dim=1, keepdim=True)
+        max_map = torch.amax(x, dim=1, keepdim=True)
+        local_mean = F.avg_pool2d(avg_map, kernel_size=5, stride=1, padding=2)
+        contrast_map = torch.abs(avg_map - local_mean)
+        gate = self.project(torch.cat([avg_map, max_map, contrast_map], dim=1))
+        return self.refine(x * gate + x)
+
+
+class ThermalFusionGate(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        self.gate = nn.Sequential(
+            conv_bn_relu(channels * 2, channels, kernel_size=1),
+            nn.Conv2d(channels, 2, kernel_size=1),
+        )
+        self.out = nn.Sequential(
+            conv_bn_relu(channels, channels, kernel_size=1),
+            ChannelAttention(channels),
+        )
+
+    def forward(self, low: torch.Tensor, high: torch.Tensor) -> torch.Tensor:
+        if high.shape[-2:] != low.shape[-2:]:
+            high = F.interpolate(high, size=low.shape[-2:], mode="bilinear", align_corners=False)
+        logits = self.gate(torch.cat([low, high], dim=1))
+        weights = torch.softmax(logits, dim=1)
+        fused = low * weights[:, 0:1] + high * weights[:, 1:2]
+        return self.out(fused)
+
+
+class PyramidContext(nn.Module):
+    def __init__(self, channels: int, bins: tuple[int, ...] = (1, 2, 4)) -> None:
+        super().__init__()
+        hidden = max(channels // len(bins), 16)
+        self.paths = nn.ModuleList([conv_bn_relu(channels, hidden, kernel_size=1) for _ in bins])
+        self.bins = bins
+        self.merge = conv_bn_relu(channels + hidden * len(bins), channels, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        features = [x]
+        for bin_size, path in zip(self.bins, self.paths):
+            pooled = F.adaptive_avg_pool2d(x, output_size=bin_size)
+            pooled = path(pooled)
+            features.append(F.interpolate(pooled, size=x.shape[-2:], mode="bilinear", align_corners=False))
+        return self.merge(torch.cat(features, dim=1))
+
+
 class FlexibleBackbone(nn.Module):
     def __init__(self, spec: BackboneSpec, in_channels: int = 1) -> None:
         super().__init__()
@@ -124,6 +180,7 @@ class FlexibleBackbone(nn.Module):
             "csp": self._build_csp,
             "resnet": self._build_resnet,
             "seresnet": self._build_seresnet,
+            "thermresnet": self._build_thermresnet,
         }[spec.family]
         builder(in_channels)
 
@@ -299,6 +356,48 @@ class FlexibleBackbone(nn.Module):
         self.out_channels = ch[3]
         self.low_level_channels = ch[1]
 
+    def _build_thermresnet(self, in_channels: int) -> None:
+        ch = self._channels()
+        self.mode = "thermresnet"
+        self.stem = nn.Sequential(
+            conv_bn_relu(in_channels, ch[0] // 2, stride=2),
+            conv_bn_relu(ch[0] // 2, ch[0]),
+            SpatialContrastGate(ch[0]),
+        )
+        self.layer1 = nn.Sequential(
+            conv_bn_relu(ch[0], ch[1], stride=2),
+            SEResidualBottleneck(ch[1]),
+            SpatialContrastGate(ch[1]),
+            SEResidualBottleneck(ch[1]),
+        )
+        self.layer2 = nn.Sequential(
+            conv_bn_relu(ch[1], ch[2], stride=2),
+            SEResidualBottleneck(ch[2]),
+            SpatialContrastGate(ch[2]),
+            SEResidualBottleneck(ch[2]),
+        )
+        self.layer3 = nn.Sequential(
+            conv_bn_relu(ch[2], ch[3], stride=2),
+            SEResidualBottleneck(ch[3]),
+            SEResidualBottleneck(ch[3]),
+            SpatialContrastGate(ch[3]),
+            SEResidualBottleneck(ch[3]),
+        )
+        self.low_reduce = conv_bn_relu(ch[1], ch[1], kernel_size=1)
+        self.mid_reduce = conv_bn_relu(ch[2], ch[1], kernel_size=1)
+        self.deep_reduce = conv_bn_relu(ch[3], ch[1], kernel_size=1)
+        self.thermal_low_fuse = ThermalFusionGate(ch[1])
+        self.thermal_mid_fuse = ThermalFusionGate(ch[1])
+        self.out_reduce = conv_bn_relu(ch[2], ch[3], kernel_size=1)
+        self.out_refine = nn.Sequential(
+            conv_bn_relu(ch[3] * 2, ch[3], kernel_size=1),
+            SEResidualBottleneck(ch[3]),
+            SpatialContrastGate(ch[3]),
+        )
+        self.context = PyramidContext(ch[3]) if "ppm" in self.spec.name else nn.Identity()
+        self.out_channels = ch[3]
+        self.low_level_channels = ch[1]
+
     def _make_stage(self, in_channels: int, out_channels: int, block_type: str) -> nn.Sequential:
         layers: list[nn.Module] = [
             DepthwiseSeparableConv(in_channels, in_channels),
@@ -392,6 +491,30 @@ class FlexibleBackbone(nn.Module):
             )
             out = self.out_refine(
                 torch.cat([high, F.interpolate(mid, size=high.shape[-2:], mode="bilinear", align_corners=False)], dim=1)
+            )
+            return out, low_fused
+        if self.mode == "thermresnet":
+            x = self.stem(x)
+            low = self.layer1(x)
+            mid = self.layer2(low)
+            high = self.layer3(mid)
+            low_fused = self.thermal_low_fuse(
+                self.low_reduce(low),
+                self.deep_reduce(high),
+            )
+            low_fused = self.thermal_mid_fuse(
+                low_fused,
+                self.mid_reduce(mid),
+            )
+            high_context = self.context(high)
+            out = self.out_refine(
+                torch.cat(
+                    [
+                        high_context,
+                        F.interpolate(self.out_reduce(mid), size=high_context.shape[-2:], mode="bilinear", align_corners=False),
+                    ],
+                    dim=1,
+                )
             )
             return out, low_fused
         s = self.stem(x)

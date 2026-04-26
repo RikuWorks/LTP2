@@ -365,6 +365,29 @@ python run_resnet_plus_suite.py \
   --output outputs/resnet_plus_suite
 ```
 
+## Novel Thermal ResNet
+
+SE 版をさらに改良した、サーマル向けの新規モデルも追加しています。
+
+- `pose_resnet50_se_thermal`
+- `pose_resnet101_se_thermal`
+- `pose_resnet101_se_thermal_ppm`
+
+追加した要素:
+
+- `SE` に加えた `spatial contrast gate`
+- 浅い特徴と深い特徴を重み付きで混ぜる `thermal fusion gate`
+- `ppm` 版では簡易 `pyramid context`
+
+実行例:
+
+```bash
+python run_resnet_novel_suite.py \
+  --pretrain-config configs/coco_pretrain_paper_grade_fast.yaml \
+  --finetune-config configs/openthermalpose2_finetune_paper_grade_fast.yaml \
+  --output outputs/resnet_novel_suite
+```
+
 ## Paper Grade 高速設定
 
 速度優先で paper-grade 6 モデルを回すための config も追加しています。
