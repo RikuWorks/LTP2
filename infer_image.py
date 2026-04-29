@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import cv2
+
+from lite_therm_pose import load_config
+from lite_therm_pose.inference import RuntimeBundle, load_weights, run_topdown_inference
+from lite_therm_pose.models.detector import TinyPersonDetector
+from lite_therm_pose.models.pose_topdown import TopDownPoseCNN
+from lite_therm_pose.runtime import resolve_model_device
+from lite_therm_pose.utils import ensure_dir
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run top-down thermal pose inference on a single image.")
+    parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--detector", type=str, required=True)
+    parser.add_argument("--pose", type=str, required=True)
+    parser.add_argument("--input", type=str, required=True)
+    parser.add_argument("--output", type=str, required=True)
+    parser.add_argument("--model", type=str, default="")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    cfg = load_config(args.config)
+    if args.model:
+        cfg.model.name = args.model
+    detector_device = resolve_model_device(cfg.runtime.detector_device, cfg.runtime.device, "detector")
+    pose_device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
+    in_channels = 1 if cfg.dataset.grayscale else 3
+    detector = TinyPersonDetector(in_channels=in_channels, model_name=cfg.model.name).to(detector_device).eval()
+    pose_model = TopDownPoseCNN(
+        num_keypoints=cfg.dataset.num_keypoints,
+        num_parts=len(cfg.dataset.body_parts),
+        in_channels=in_channels,
+        model_name=cfg.model.name,
+    ).to(pose_device).eval()
+    load_weights(detector, args.detector)
+    load_weights(pose_model, args.pose)
+    frame = cv2.imread(args.input, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise FileNotFoundError(args.input)
+    if cfg.dataset.grayscale:
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)[:, :, None]
+    bundle = RuntimeBundle(
+        detector=detector,
+        pose_model=pose_model,
+        detector_device=detector_device,
+        pose_device=pose_device,
+        dataset_cfg=cfg.dataset,
+        detector_cfg=cfg.detector,
+    )
+    visual = run_topdown_inference(bundle, frame)
+    output_path = Path(args.output)
+    ensure_dir(output_path.parent)
+    cv2.imwrite(str(output_path), visual)
+    print(f"saved: {output_path}")
+
+
+if __name__ == "__main__":
+    main()

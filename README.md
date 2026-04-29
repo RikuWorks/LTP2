@@ -410,3 +410,16 @@ python run_paper_grade_suite.py \
   --finetune-config configs/openthermalpose2_finetune_paper_grade_fast.yaml \
   --output outputs/paper_grade_suite_fast
 ```
+## 静止画推論
+
+1 枚画像を読み込んで、人物検出と 17 点姿勢推定の結果を書き出せます。
+
+```bash
+python infer_image.py \
+  --config configs/openthermalpose2_finetune_paper_grade_fast.yaml \
+  --model pose_resnet101_se_thermal_ppm \
+  --detector outputs/resnet_novel_suite/pose_resnet101_se_thermal_ppm/finetune_detector/detector_last.pt \
+  --pose outputs/resnet_novel_suite/pose_resnet101_se_thermal_ppm/finetune_pose/pose_last.pt \
+  --input path/to/input.png \
+  --output outputs/inference/result_pose_resnet101_se_thermal_ppm.png
+```
