@@ -18,6 +18,7 @@ env/
 # Dataset directories
 data/
 datasets/
+paper/
 
 # Raw downloads and extracted archives
 *.zip

@@ -436,3 +436,29 @@ python infer_directory.py \
   --input-dir path/to/input_dir \
   --output-dir outputs/inference_dir/pose_resnet101_se_thermal_ppm
 ```
+## OpenThermalPose2 Test ベンチ
+
+`data/raw` 配下の OpenThermalPose2 `testimage` / `testlabel` を自動探索して、
+精度・速度・可視化比較をまとめて行うスクリプトです。
+
+取得する主な項目:
+
+- `det_recall50_test`, `det_precision50_test`, `det_mean_iou_test`
+- `pose_pck20_test`, `pose_pck10_test`, `pose_pck05_test`
+- `pose_pckh50_test`, `pose_pckh30_test`
+- `pose_mean_error_px_test`, `pose_mean_error_bbox_test`
+- `joint_score_test`, `joint_pckh50_test`
+- CPU / GPU の detector, pose, joint の `fps` と `latency`
+- パラメータ数、checkpoint サイズ、GPU peak memory
+- モデルごとの推論画像と比較シート
+
+実行例:
+
+```bash
+python benchmark_otp2_testset.py \
+  --config configs/openthermalpose2_finetune_paper_grade_fast.yaml \
+  --suite-dir outputs/resnet_plus_suite \
+  --suite-dir outputs/resnet_novel_suite \
+  --models pose_resnet101_se,pose_resnet50_se_thermal,pose_resnet101_se_thermal_ppm \
+  --output outputs/otp2_test_benchmark
+```
