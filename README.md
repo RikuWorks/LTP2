@@ -423,3 +423,16 @@ python infer_image.py \
   --input path/to/input.png \
   --output outputs/inference/result_pose_resnet101_se_thermal_ppm.png
 ```
+## ディレクトリ推論
+
+フォルダ内の画像をまとめて推論したいときは `infer_directory.py` を使います。
+
+```bash
+python infer_directory.py \
+  --config configs/openthermalpose2_finetune_paper_grade_fast.yaml \
+  --model pose_resnet101_se_thermal_ppm \
+  --detector outputs/resnet_novel_suite/pose_resnet101_se_thermal_ppm/finetune_detector/detector_last.pt \
+  --pose outputs/resnet_novel_suite/pose_resnet101_se_thermal_ppm/finetune_pose/pose_last.pt \
+  --input-dir path/to/input_dir \
+  --output-dir outputs/inference_dir/pose_resnet101_se_thermal_ppm
+```
