@@ -21,6 +21,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=str, required=True)
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--model", type=str, default="")
+    parser.add_argument("--draw-parts", dest="draw_parts", action="store_true")
+    parser.add_argument("--no-draw-parts", dest="draw_parts", action="store_false")
+    parser.set_defaults(draw_parts=None)
     return parser.parse_args()
 
 
@@ -29,6 +32,8 @@ def main() -> None:
     cfg = load_config(args.config)
     if args.model:
         cfg.model.name = args.model
+    if args.draw_parts is not None:
+        cfg.runtime.draw_parts = args.draw_parts
     detector_device = resolve_model_device(cfg.runtime.detector_device, cfg.runtime.device, "detector")
     pose_device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
     in_channels = 1 if cfg.dataset.grayscale else 3
@@ -53,6 +58,7 @@ def main() -> None:
         pose_device=pose_device,
         dataset_cfg=cfg.dataset,
         detector_cfg=cfg.detector,
+        draw_parts=cfg.runtime.draw_parts,
     )
     visual = run_topdown_inference(bundle, frame)
     output_path = Path(args.output)
