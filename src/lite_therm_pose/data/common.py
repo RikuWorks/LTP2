@@ -110,6 +110,18 @@ class PoseDataset(Dataset):
         self.train = train
         self.records = load_coco_records(dataset_cfg)
         self.part_map = {name: idx for idx, name in enumerate(dataset_cfg.body_parts)}
+        self.head_indices = {0, 1, 2, 3, 4}
+        self.extremity_indices = {9, 10, 15, 16}
+        self.limb_indices = {5, 6, 7, 8, 11, 12, 13, 14}
+
+    def _joint_weight_multiplier(self, joint_idx: int) -> float:
+        if joint_idx in self.head_indices:
+            return self.dataset_cfg.head_weight_boost
+        if joint_idx in self.extremity_indices:
+            return self.dataset_cfg.extremity_weight_boost
+        if joint_idx in self.limb_indices:
+            return self.dataset_cfg.limb_weight_boost
+        return 1.0
 
     def __len__(self) -> int:
         return len(self.records)
@@ -160,7 +172,8 @@ class PoseDataset(Dataset):
             if 0 <= map_x < heat_w and 0 <= map_y < heat_h:
                 draw_gaussian(kp_heatmaps[joint_idx], (map_x, map_y), radius=2)
                 visible[joint_idx] = 1.0
-                weights[joint_idx] = 1.0 if vis > 1 else 0.5
+                base_weight = 1.0 if vis > 1 else 0.5
+                weights[joint_idx] = base_weight * self._joint_weight_multiplier(joint_idx)
         for name, center in record.body_parts.items():
             if name not in self.part_map:
                 continue

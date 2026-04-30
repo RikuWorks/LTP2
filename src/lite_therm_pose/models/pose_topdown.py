@@ -67,6 +67,17 @@ def pose_loss(preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) ->
     return heatmap_loss + 0.5 * part_loss + 0.1 * visibility_loss
 
 
+def _refine_peak(heatmap: torch.Tensor, px: int, py: int) -> tuple[float, float]:
+    height, width = heatmap.shape
+    refined_x = float(px)
+    refined_y = float(py)
+    if 1 <= px < width - 1:
+        refined_x += float(torch.sign(heatmap[py, px + 1] - heatmap[py, px - 1]) * 0.25)
+    if 1 <= py < height - 1:
+        refined_y += float(torch.sign(heatmap[py + 1, px] - heatmap[py - 1, px]) * 0.25)
+    return refined_x, refined_y
+
+
 @torch.no_grad()
 def decode_pose(
     preds: dict[str, torch.Tensor],
@@ -90,9 +101,10 @@ def decode_pose(
             flat_idx = kp_map[idx].argmax()
             py = int(flat_idx // heat_w)
             px = int(flat_idx % heat_w)
+            refined_px, refined_py = _refine_peak(kp_map[idx], px, py)
             score = float(kp_map[idx, py, px] * vis[idx])
-            x = x1 + (px / max(heat_w - 1, 1)) * box_w
-            y = y1 + (py / max(heat_h - 1, 1)) * box_h
+            x = x1 + (refined_px / max(heat_w - 1, 1)) * box_w
+            y = y1 + (refined_py / max(heat_h - 1, 1)) * box_h
             coords.append([x, y])
             scores.append(score)
         part_centers = {}

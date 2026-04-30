@@ -23,6 +23,9 @@ class DatasetConfig:
     grayscale: bool = False
     single_person: bool = False
     min_box_size: float = 16.0
+    head_weight_boost: float = 1.35
+    extremity_weight_boost: float = 1.2
+    limb_weight_boost: float = 1.1
 
 
 @dataclass
