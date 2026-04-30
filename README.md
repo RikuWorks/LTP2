@@ -444,6 +444,9 @@ python infer_directory.py \
 取得する主な項目:
 
 - `det_recall50_test`, `det_precision50_test`, `det_mean_iou_test`
+- `det_map50_95_test`, `det_map50_test`, `det_map75_test`
+- `pose_map50_95_test`, `pose_map50_test`, `pose_map75_test`
+- `pose_mean_oks_test`
 - `pose_pck20_test`, `pose_pck10_test`, `pose_pck05_test`
 - `pose_pckh50_test`, `pose_pckh30_test`
 - `pose_mean_error_px_test`, `pose_mean_error_bbox_test`

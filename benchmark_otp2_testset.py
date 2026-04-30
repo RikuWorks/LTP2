@@ -11,6 +11,8 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
 
 from lite_therm_pose import load_config
 from lite_therm_pose.checkpoints import load_flexible_state_dict
@@ -33,6 +35,18 @@ class BenchmarkRun:
 
 
 HEAD_INDICES = (0, 1, 2, 3, 4)
+COCO_KEYPOINT_NAMES = [
+    "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+    "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+    "left_wrist", "right_wrist", "left_hip", "right_hip",
+    "left_knee", "right_knee", "left_ankle", "right_ankle",
+]
+COCO_SKELETON = [
+    [16, 14], [14, 12], [17, 15], [15, 13], [12, 13],
+    [6, 12], [7, 13], [6, 7], [6, 8], [7, 9],
+    [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],
+    [2, 4], [3, 5], [4, 6], [5, 7],
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -117,6 +131,11 @@ def xyxy_from_xywh(bbox_xywh: list[float]) -> list[float]:
     return [x, y, x + w, y + h]
 
 
+def xywh_from_xyxy(bbox_xyxy: list[float]) -> list[float]:
+    x1, y1, x2, y2 = bbox_xyxy
+    return [float(x1), float(y1), float(max(x2 - x1, 1.0)), float(max(y2 - y1, 1.0))]
+
+
 def head_size(person: OTP2TestPerson) -> float:
     visible_head = person.keypoints[list(HEAD_INDICES)]
     visible_head = visible_head[visible_head[:, 2] > 0]
@@ -166,6 +185,117 @@ def person_metrics(pred: PosePrediction | None, person: OTP2TestPerson) -> dict[
 def sync_device(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+
+
+def build_coco_gt(test_images: list[OTP2TestImage]) -> COCO:
+    dataset = {
+        "images": [],
+        "annotations": [],
+        "categories": [
+            {
+                "id": 1,
+                "name": "person",
+                "supercategory": "person",
+                "keypoints": COCO_KEYPOINT_NAMES,
+                "skeleton": COCO_SKELETON,
+            }
+        ],
+    }
+    ann_id = 1
+    for item in test_images:
+        dataset["images"].append(
+            {
+                "id": item.image_id,
+                "file_name": item.image_path.name,
+                "width": item.width,
+                "height": item.height,
+            }
+        )
+        for person in item.persons:
+            keypoints = person.keypoints.reshape(-1, 3)
+            flat_keypoints = []
+            num_keypoints = 0
+            for px, py, vis in keypoints.tolist():
+                if vis > 0:
+                    flat_keypoints.extend([float(px), float(py), float(vis)])
+                    num_keypoints += 1
+                else:
+                    flat_keypoints.extend([0.0, 0.0, 0.0])
+            bbox = [float(value) for value in person.bbox_xywh]
+            dataset["annotations"].append(
+                {
+                    "id": ann_id,
+                    "image_id": item.image_id,
+                    "category_id": 1,
+                    "bbox": bbox,
+                    "area": float(bbox[2] * bbox[3]),
+                    "iscrowd": 0,
+                    "num_keypoints": num_keypoints,
+                    "keypoints": flat_keypoints,
+                }
+            )
+            ann_id += 1
+    coco = COCO()
+    coco.dataset = dataset
+    coco.createIndex()
+    return coco
+
+
+def make_empty_coco_results(image_id: int) -> list[dict[str, float | int | list[float]]]:
+    return [{"image_id": image_id, "category_id": 1, "bbox": [0.0, 0.0, 1.0, 1.0], "score": 1.0e-9}]
+
+
+def make_empty_keypoint_results(image_id: int) -> list[dict[str, float | int | list[float]]]:
+    return [
+        {
+            "image_id": image_id,
+            "category_id": 1,
+            "keypoints": [0.0] * (17 * 3),
+            "score": 1.0e-9,
+        }
+    ]
+
+
+def _run_cocoeval(coco_gt: COCO, results: list[dict], iou_type: str) -> tuple[COCOeval, dict[str, float]]:
+    coco_dt = coco_gt.loadRes(results)
+    evaluator = COCOeval(coco_gt, coco_dt, iouType=iou_type)
+    evaluator.evaluate()
+    evaluator.accumulate()
+    evaluator.summarize()
+    if iou_type == "bbox":
+        prefix = "det"
+    else:
+        prefix = "pose"
+    return evaluator, {
+        f"{prefix}_map50_95_test": float(evaluator.stats[0]),
+        f"{prefix}_map50_test": float(evaluator.stats[1]),
+        f"{prefix}_map75_test": float(evaluator.stats[2]),
+        f"{prefix}_ar50_95_test": float(evaluator.stats[8]),
+    }
+
+
+def compute_mean_oks(test_images: list[OTP2TestImage], joint_pose_predictions: dict[int, list[PosePrediction]]) -> float:
+    oks_values: list[float] = []
+    sigmas = np.array([0.026, 0.025, 0.025, 0.035, 0.035, 0.079, 0.079, 0.072, 0.072, 0.062, 0.062, 0.107, 0.107, 0.087, 0.087, 0.089, 0.089], dtype=np.float32)
+    vars_ = (sigmas * 2.0) ** 2
+    for item in test_images:
+        preds = joint_pose_predictions.get(item.image_id, [])
+        for gt_idx, person in enumerate(item.persons):
+            if gt_idx >= len(preds):
+                oks_values.append(0.0)
+                continue
+            pred = preds[gt_idx]
+            gt = person.keypoints
+            visible = gt[:, 2] > 0
+            if not visible.any():
+                continue
+            pred_xy = pred.keypoints.cpu().numpy()
+            gt_xy = gt[:, :2]
+            bbox_area = max(float(person.bbox_xywh[2] * person.bbox_xywh[3]), 1.0)
+            squared_dist = np.sum((pred_xy - gt_xy) ** 2, axis=1)
+            oks = np.exp(-squared_dist / (2.0 * bbox_area * vars_))
+            oks_values.append(float(np.mean(oks[visible])))
+    return float(np.mean(oks_values) if oks_values else 0.0)
 
 
 @torch.no_grad()
@@ -293,6 +423,55 @@ def evaluate_joint(bundle: RuntimeBundle, test_images: list[OTP2TestImage]) -> d
         "joint_pckh50_test": float(np.mean(metrics["pckh50"]) if metrics["pckh50"] else 0.0),
         "joint_mean_iou_test": float(np.mean(joint_det_iou) if joint_det_iou else 0.0),
     }
+
+
+def collect_coco_predictions(bundle: RuntimeBundle, test_images: list[OTP2TestImage]) -> tuple[list[dict], list[dict], dict[int, list[PosePrediction]]]:
+    bbox_results: list[dict] = []
+    keypoint_results: list[dict] = []
+    joint_pose_predictions: dict[int, list[PosePrediction]] = {}
+    for item in test_images:
+        image = load_image(item.image_path, grayscale=bundle.dataset_cfg.grayscale)
+        det_pred = predict_detector(bundle, image)
+        gt_boxes = torch.tensor([xyxy_from_xywh(person.bbox_xywh) for person in item.persons], dtype=torch.float32)
+        if det_pred.boxes.numel() > 0:
+            iou = box_iou_xyxy(det_pred.boxes.float(), gt_boxes.float())
+            best_idx_per_gt = iou.max(dim=0).indices
+            matched_boxes = [det_pred.boxes[int(index)].tolist() for index in best_idx_per_gt]
+            pose_preds = predict_pose(bundle, image, matched_boxes)
+            joint_pose_predictions[item.image_id] = pose_preds
+            for box, score in zip(det_pred.boxes.tolist(), det_pred.scores.tolist()):
+                bbox_results.append(
+                    {
+                        "image_id": item.image_id,
+                        "category_id": 1,
+                        "bbox": xywh_from_xyxy(box),
+                        "score": float(score),
+                    }
+                )
+            for pred_idx, pose_pred in enumerate(pose_preds):
+                if pred_idx >= len(matched_boxes):
+                    continue
+                det_score = float(det_pred.scores[int(best_idx_per_gt[pred_idx])].item())
+                flattened_keypoints: list[float] = []
+                keypoint_scores = pose_pred.keypoint_scores.tolist()
+                for (px, py), kp_score in zip(pose_pred.keypoints.tolist(), keypoint_scores):
+                    vis_value = 2.0 if kp_score > 0.15 else 0.0
+                    flattened_keypoints.extend([float(px), float(py), vis_value])
+                keypoint_results.append(
+                    {
+                        "image_id": item.image_id,
+                        "category_id": 1,
+                        "keypoints": flattened_keypoints,
+                        "score": float(det_score * np.mean(keypoint_scores)),
+                    }
+                )
+        else:
+            joint_pose_predictions[item.image_id] = []
+    if not bbox_results:
+        bbox_results = make_empty_coco_results(test_images[0].image_id)
+    if not keypoint_results:
+        keypoint_results = make_empty_keypoint_results(test_images[0].image_id)
+    return bbox_results, keypoint_results, joint_pose_predictions
 
 
 def benchmark_runtime(bundle: RuntimeBundle, test_images: list[OTP2TestImage], warmup: int) -> dict[str, float]:
@@ -476,6 +655,18 @@ def plot_charts(rows: list[dict[str, float | str]], output_dir: Path) -> None:
     plt.close()
 
     plt.figure(figsize=(15, 6))
+    width = 0.22
+    plt.bar(x - width, [float(row["det_map50_95_test"]) for row in rows], width=width, label="det mAP50-95")
+    plt.bar(x, [float(row["pose_map50_95_test"]) for row in rows], width=width, label="pose mAP50-95")
+    plt.bar(x + width, [float(row["pose_mean_oks_test"]) for row in rows], width=width, label="mean OKS")
+    plt.xticks(x, labels, rotation=35, ha="right")
+    plt.ylim(0, 1.0)
+    plt.tight_layout()
+    plt.legend()
+    plt.savefig(output_dir / "coco_metrics_comparison.png", dpi=160)
+    plt.close()
+
+    plt.figure(figsize=(15, 6))
     width = 0.35
     plt.bar(x - width / 2, [float(row["cpu_joint_fps_images"]) for row in rows], width=width, label="CPU joint fps")
     plt.bar(x + width / 2, [float(row["gpu_joint_fps_images"]) for row in rows], width=width, label="GPU joint fps")
@@ -515,6 +706,7 @@ def main() -> None:
         labels_dir=args.test_labels_dir or None,
         search_roots=args.search_root or None,
     )
+    coco_gt = build_coco_gt(test_images)
     rows: list[dict[str, float | str]] = []
     gpu_available = torch.cuda.is_available()
     visual_device = args.gpu_device if gpu_available else args.cpu_device
@@ -526,6 +718,10 @@ def main() -> None:
         detector_stats = evaluate_detector(eval_bundle, test_images)
         pose_stats = evaluate_pose_gt(eval_bundle, test_images)
         joint_stats = evaluate_joint(eval_bundle, test_images)
+        bbox_results, keypoint_results, joint_pose_predictions = collect_coco_predictions(eval_bundle, test_images)
+        _, det_coco_stats = _run_cocoeval(coco_gt, bbox_results, "bbox")
+        _, pose_coco_stats = _run_cocoeval(coco_gt, keypoint_results, "keypoints")
+        pose_mean_oks = compute_mean_oks(test_images, joint_pose_predictions)
 
         cpu_bundle = build_bundle(args.config, run, args.cpu_device, args.cpu_device, draw_parts=False)
         cpu_speed = benchmark_runtime(cpu_bundle, test_images, warmup=args.warmup)
@@ -548,6 +744,9 @@ def main() -> None:
             **detector_stats,
             **pose_stats,
             **joint_stats,
+            **det_coco_stats,
+            **pose_coco_stats,
+            "pose_mean_oks_test": pose_mean_oks,
             "cpu_det_fps_images": cpu_speed["det_fps_images"],
             "cpu_det_latency_ms_test": cpu_speed["det_latency_ms_test"],
             "cpu_pose_fps_images": cpu_speed["pose_fps_images"],
