@@ -95,6 +95,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
     runs = otp2_bench.discover_runs(bench_args.suite_dir, models_filter)
     if not runs:
         raise FileNotFoundError("No runnable model checkpoints were found after PCKh refinement.")
+    for run in runs:
+        if run.model_name == REFINE_RUN_NAME:
+            run.model_name = REFINE_MODEL_NAME
     test_images = otp2_bench.load_otp2_test_images(
         images_dir=bench_args.test_images_dir or None,
         labels_dir=bench_args.test_labels_dir or None,
