@@ -1,0 +1,26 @@
+dataset:
+  image_root: data/openthermalpose2/images
+  annotation_file: data/openthermalpose2/annotations/train.json
+  val_image_root: data/openthermalpose2/images
+  val_annotation_file: data/openthermalpose2/annotations/val.json
+  image_size: [256, 192]
+  heatmap_size: [64, 48]
+  num_keypoints: 17
+  grayscale: true
+  body_parts: [head, torso, left_arm, right_arm, left_leg, right_leg]
+model:
+  name: pose_resnet101_se_thermal_dualpath_ppm
+optim:
+  batch_size: 4
+  epochs: 18
+  lr: 0.00015
+  workers: 4
+augmentation:
+  partial_crop_prob: 0.12
+detector:
+  image_size: [256, 256]
+  score_threshold: 0.18
+runtime:
+  device: auto
+  detector_device: cuda:0
+  pose_device: cuda:1

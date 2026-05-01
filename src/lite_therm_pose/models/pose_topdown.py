@@ -23,6 +23,7 @@ class TopDownPoseCNN(nn.Module):
         super().__init__()
         spec = get_model_spec(model_name)
         c0, c1, c2 = spec.decoder_channels
+        self.use_low_level_fusion = "dualpath" in model_name
         self.backbone = build_backbone(model_name, in_channels=in_channels)
         self.decoder = nn.Sequential(
             nn.Conv2d(self.backbone.out_channels, c0, kernel_size=1, bias=False),
@@ -33,6 +34,16 @@ class TopDownPoseCNN(nn.Module):
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
             DepthwiseSeparableConv(c1, c2),
         )
+        if self.use_low_level_fusion:
+            self.low_level_proj = nn.Sequential(
+                nn.Conv2d(self.backbone.low_level_channels, c2, kernel_size=1, bias=False),
+                nn.BatchNorm2d(c2),
+                nn.ReLU(inplace=True),
+            )
+            self.fusion_refine = nn.Sequential(
+                DepthwiseSeparableConv(c2 * 2, c2),
+                DepthwiseSeparableConv(c2, c2),
+            )
         self.keypoint_head = nn.Conv2d(c2, num_keypoints, kernel_size=1)
         self.part_head = nn.Conv2d(c2, num_parts, kernel_size=1)
         self.visibility_head = nn.Sequential(
@@ -42,12 +53,17 @@ class TopDownPoseCNN(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        features, _ = self.backbone(x)
+        features, low_level = self.backbone(x)
         decoded = self.decoder(features)
         target_h = max(x.shape[-2] // 4, 1)
         target_w = max(x.shape[-1] // 4, 1)
         if decoded.shape[-2:] != (target_h, target_w):
             decoded = F.interpolate(decoded, size=(target_h, target_w), mode="bilinear", align_corners=False)
+        if self.use_low_level_fusion:
+            low = self.low_level_proj(low_level)
+            if low.shape[-2:] != decoded.shape[-2:]:
+                low = F.interpolate(low, size=decoded.shape[-2:], mode="bilinear", align_corners=False)
+            decoded = self.fusion_refine(torch.cat([decoded, low], dim=1))
         return {
             "keypoint_heatmaps": self.keypoint_head(decoded),
             "part_heatmaps": self.part_head(decoded),
