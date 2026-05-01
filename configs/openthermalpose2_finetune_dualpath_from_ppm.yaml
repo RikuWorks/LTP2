@@ -10,6 +10,8 @@ dataset:
   body_parts: [head, torso, left_arm, right_arm, left_leg, right_leg]
 model:
   name: pose_resnet101_se_thermal_dualpath_ppm
+  detector_name: pose_resnet101_se_thermal_ppm
+  pose_name: pose_resnet101_se_thermal_dualpath_ppm
 optim:
   batch_size: 4
   epochs: 18

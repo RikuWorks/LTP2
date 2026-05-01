@@ -98,7 +98,9 @@ def discover_runs(suite_dirs: list[str], models_filter: set[str]) -> list[Benchm
 
 def build_bundle(config_path: str, run: BenchmarkRun, detector_device_name: str, pose_device_name: str, draw_parts: bool = False) -> RuntimeBundle:
     cfg = load_config(config_path)
-    cfg.model.name = run.model_name
+    detector_model_name = cfg.model.detector_name or run.model_name
+    pose_model_name = cfg.model.pose_name or run.model_name
+    cfg.model.name = pose_model_name
     cfg.runtime.detector_device = detector_device_name
     cfg.runtime.pose_device = pose_device_name
     cfg.runtime.device = detector_device_name if detector_device_name == pose_device_name else "auto"
@@ -106,12 +108,12 @@ def build_bundle(config_path: str, run: BenchmarkRun, detector_device_name: str,
     detector_device = resolve_model_device(cfg.runtime.detector_device, cfg.runtime.device, "detector")
     pose_device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
     in_channels = 1 if cfg.dataset.grayscale else 3
-    detector = TinyPersonDetector(in_channels=in_channels, model_name=cfg.model.name).to(detector_device).eval()
+    detector = TinyPersonDetector(in_channels=in_channels, model_name=detector_model_name).to(detector_device).eval()
     pose_model = TopDownPoseCNN(
         num_keypoints=cfg.dataset.num_keypoints,
         num_parts=len(cfg.dataset.body_parts),
         in_channels=in_channels,
-        model_name=cfg.model.name,
+        model_name=pose_model_name,
     ).to(pose_device).eval()
     load_flexible_state_dict(detector, str(run.detector_ckpt))
     load_flexible_state_dict(pose_model, str(run.pose_ckpt))

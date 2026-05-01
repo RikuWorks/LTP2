@@ -17,17 +17,19 @@ from .runtime import resolve_model_device
 def build_detector(cfg: ExperimentConfig) -> tuple[TinyPersonDetector, torch.device]:
     device = resolve_model_device(cfg.runtime.detector_device, cfg.runtime.device, "detector")
     in_channels = 1 if cfg.dataset.grayscale else 3
-    return TinyPersonDetector(in_channels=in_channels, model_name=cfg.model.name).to(device), device
+    model_name = cfg.model.detector_name or cfg.model.name
+    return TinyPersonDetector(in_channels=in_channels, model_name=model_name).to(device), device
 
 
 def build_pose_model(cfg: ExperimentConfig) -> tuple[TopDownPoseCNN, torch.device]:
     device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
     in_channels = 1 if cfg.dataset.grayscale else 3
+    model_name = cfg.model.pose_name or cfg.model.name
     return TopDownPoseCNN(
         num_keypoints=cfg.dataset.num_keypoints,
         num_parts=len(cfg.dataset.body_parts),
         in_channels=in_channels,
-        model_name=cfg.model.name,
+        model_name=model_name,
     ).to(device), device
 
 

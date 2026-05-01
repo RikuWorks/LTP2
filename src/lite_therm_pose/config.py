@@ -58,6 +58,8 @@ class DetectorConfig:
 @dataclass
 class ModelConfig:
     name: str = "dsconv_s"
+    detector_name: str = ""
+    pose_name: str = ""
 
 
 @dataclass

@@ -72,6 +72,8 @@ def run_training(args: argparse.Namespace) -> None:
 
     cfg = load_config(args.config)
     cfg.model.name = TARGET_MODEL_NAME
+    cfg.model.detector_name = SOURCE_MODEL_NAME
+    cfg.model.pose_name = TARGET_MODEL_NAME
     train_pose(cfg, run_root / "finetune_pose", weights=str(source_pose_ckpt))
 
 
@@ -94,10 +96,6 @@ def run_benchmark(args: argparse.Namespace) -> None:
     runs = otp2_bench.discover_runs(bench_args.suite_dir, models_filter)
     if not runs:
         raise FileNotFoundError("No runnable model checkpoints were found after training.")
-    for run in runs:
-        if run.model_name == RUN_NAME:
-            run.model_name = TARGET_MODEL_NAME
-
     test_images = otp2_bench.load_otp2_test_images(
         images_dir=bench_args.test_images_dir or None,
         labels_dir=bench_args.test_labels_dir or None,
