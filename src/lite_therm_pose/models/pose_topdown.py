@@ -26,6 +26,7 @@ class TopDownPoseCNN(nn.Module):
         self.use_low_level_fusion = "dualpath" in model_name
         self.use_extra_refine = "refine" in model_name
         self.use_heatmap_modulation = "modulated" in model_name
+        self.use_elite_refine = "elite" in model_name
         self.backbone = build_backbone(model_name, in_channels=in_channels)
         self.decoder = nn.Sequential(
             nn.Conv2d(self.backbone.out_channels, c0, kernel_size=1, bias=False),
@@ -48,6 +49,24 @@ class TopDownPoseCNN(nn.Module):
             )
         if self.use_extra_refine:
             self.extra_refine = nn.Sequential(
+                DepthwiseSeparableConv(c2, c2),
+                DepthwiseSeparableConv(c2, c2),
+            )
+        if self.use_elite_refine:
+            self.elite_low_proj = nn.Sequential(
+                nn.Conv2d(self.backbone.low_level_channels, c2, kernel_size=1, bias=False),
+                nn.BatchNorm2d(c2),
+                nn.ReLU(inplace=True),
+            )
+            self.elite_gate = nn.Sequential(
+                nn.Conv2d(c2 * 2, c2, kernel_size=1, bias=False),
+                nn.BatchNorm2d(c2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(c2, c2, kernel_size=1),
+                nn.Sigmoid(),
+            )
+            self.elite_context_refine = nn.Sequential(
+                DepthwiseSeparableConv(c2, c2),
                 DepthwiseSeparableConv(c2, c2),
                 DepthwiseSeparableConv(c2, c2),
             )
@@ -79,6 +98,13 @@ class TopDownPoseCNN(nn.Module):
             if low.shape[-2:] != decoded.shape[-2:]:
                 low = F.interpolate(low, size=decoded.shape[-2:], mode="bilinear", align_corners=False)
             decoded = self.fusion_refine(torch.cat([decoded, low], dim=1))
+        if self.use_elite_refine:
+            low = self.elite_low_proj(low_level)
+            if low.shape[-2:] != decoded.shape[-2:]:
+                low = F.interpolate(low, size=decoded.shape[-2:], mode="bilinear", align_corners=False)
+            gate = self.elite_gate(torch.cat([decoded, low], dim=1))
+            decoded = decoded + low * gate
+            decoded = decoded + self.elite_context_refine(decoded)
         if self.use_extra_refine:
             decoded = decoded + self.extra_refine(decoded)
         keypoint_heatmaps = self.keypoint_head(decoded)

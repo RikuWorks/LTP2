@@ -1,0 +1,26 @@
+dataset:
+  image_root: data/coco/train2017
+  annotation_file: data/coco/annotations/person_keypoints_train2017.json
+  val_image_root: data/coco/val2017
+  val_annotation_file: data/coco/annotations/person_keypoints_val2017.json
+  image_size: [288, 224]
+  heatmap_size: [72, 56]
+  num_keypoints: 17
+  grayscale: true
+  body_parts: [head, torso, left_arm, right_arm, left_leg, right_leg]
+model:
+  name: pose_resnet101_se_thermal_elite_ppm
+optim:
+  batch_size: 4
+  epochs: 28
+  lr: 0.0004
+  workers: 4
+augmentation:
+  partial_crop_prob: 0.2
+detector:
+  image_size: [320, 320]
+  score_threshold: 0.2
+runtime:
+  device: auto
+  detector_device: cuda:0
+  pose_device: cuda:1
