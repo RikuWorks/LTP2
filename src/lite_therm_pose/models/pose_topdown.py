@@ -24,6 +24,8 @@ class TopDownPoseCNN(nn.Module):
         spec = get_model_spec(model_name)
         c0, c1, c2 = spec.decoder_channels
         self.use_low_level_fusion = "dualpath" in model_name
+        self.use_extra_refine = "refine" in model_name
+        self.use_heatmap_modulation = "modulated" in model_name
         self.backbone = build_backbone(model_name, in_channels=in_channels)
         self.decoder = nn.Sequential(
             nn.Conv2d(self.backbone.out_channels, c0, kernel_size=1, bias=False),
@@ -44,6 +46,11 @@ class TopDownPoseCNN(nn.Module):
                 DepthwiseSeparableConv(c2 * 2, c2),
                 DepthwiseSeparableConv(c2, c2),
             )
+        if self.use_extra_refine:
+            self.extra_refine = nn.Sequential(
+                DepthwiseSeparableConv(c2, c2),
+                DepthwiseSeparableConv(c2, c2),
+            )
         self.keypoint_head = nn.Conv2d(c2, num_keypoints, kernel_size=1)
         self.part_head = nn.Conv2d(c2, num_parts, kernel_size=1)
         self.visibility_head = nn.Sequential(
@@ -51,6 +58,14 @@ class TopDownPoseCNN(nn.Module):
             nn.Flatten(),
             nn.Linear(c2, num_keypoints),
         )
+        if self.use_heatmap_modulation:
+            self.heatmap_gate = nn.Sequential(
+                nn.Conv2d(c2, c2, kernel_size=1, bias=False),
+                nn.BatchNorm2d(c2),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(c2, num_keypoints, kernel_size=1),
+                nn.Sigmoid(),
+            )
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features, low_level = self.backbone(x)
@@ -64,8 +79,13 @@ class TopDownPoseCNN(nn.Module):
             if low.shape[-2:] != decoded.shape[-2:]:
                 low = F.interpolate(low, size=decoded.shape[-2:], mode="bilinear", align_corners=False)
             decoded = self.fusion_refine(torch.cat([decoded, low], dim=1))
+        if self.use_extra_refine:
+            decoded = decoded + self.extra_refine(decoded)
+        keypoint_heatmaps = self.keypoint_head(decoded)
+        if self.use_heatmap_modulation:
+            keypoint_heatmaps = keypoint_heatmaps * (0.75 + self.heatmap_gate(decoded))
         return {
-            "keypoint_heatmaps": self.keypoint_head(decoded),
+            "keypoint_heatmaps": keypoint_heatmaps,
             "part_heatmaps": self.part_head(decoded),
             "visibility": self.visibility_head(decoded),
         }
