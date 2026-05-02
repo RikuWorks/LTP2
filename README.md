@@ -465,3 +465,67 @@ python benchmark_otp2_testset.py \
   --models pose_resnet101_se,pose_resnet50_se_thermal,pose_resnet101_se_thermal_ppm \
   --output outputs/otp2_test_benchmark
 ```
+
+## Pose高精度モデル
+Pose を高精度寄りで回すときの本命は `pose_resnet101_se_thermal_ppm` です。
+このモデル向けに、学習解像度と epoch を少し厚めにした専用 config を用意しています。
+
+- `configs/coco_pretrain_pose_highacc.yaml`
+- `configs/openthermalpose2_finetune_pose_highacc.yaml`
+- `run_pose_high_accuracy_pipeline.py`
+
+個別に回す場合:
+
+```bash
+python train_detector.py \
+  --config configs/coco_pretrain_pose_highacc.yaml \
+  --model pose_resnet101_se_thermal_ppm \
+  --output outputs/pose_high_accuracy/pose_resnet101_se_thermal_ppm/pretrain_detector
+```
+
+```bash
+python train_pose.py \
+  --config configs/coco_pretrain_pose_highacc.yaml \
+  --model pose_resnet101_se_thermal_ppm \
+  --output outputs/pose_high_accuracy/pose_resnet101_se_thermal_ppm/pretrain_pose
+```
+
+```bash
+python train_detector.py \
+  --config configs/openthermalpose2_finetune_pose_highacc.yaml \
+  --model pose_resnet101_se_thermal_ppm \
+  --weights outputs/pose_high_accuracy/pose_resnet101_se_thermal_ppm/pretrain_detector/detector_last.pt \
+  --output outputs/pose_high_accuracy/pose_resnet101_se_thermal_ppm/finetune_detector
+```
+
+```bash
+python train_pose.py \
+  --config configs/openthermalpose2_finetune_pose_highacc.yaml \
+  --model pose_resnet101_se_thermal_ppm \
+  --weights outputs/pose_high_accuracy/pose_resnet101_se_thermal_ppm/pretrain_pose/pose_last.pt \
+  --output outputs/pose_high_accuracy/pose_resnet101_se_thermal_ppm/finetune_pose
+```
+
+OpenThermalPose2 test で精度・速度・可視化まで含めて測る場合:
+
+```bash
+python benchmark_otp2_testset.py \
+  --config configs/openthermalpose2_finetune_pose_highacc.yaml \
+  --suite-dir outputs/pose_high_accuracy \
+  --models pose_resnet101_se_thermal_ppm \
+  --test-images-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/images \
+  --test-labels-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/labels \
+  --output outputs/otp2_test_benchmark_pose_high_accuracy
+```
+
+最初から最後まで一発で回す場合:
+
+```bash
+python run_pose_high_accuracy_pipeline.py \
+  --pretrain-config configs/coco_pretrain_pose_highacc.yaml \
+  --finetune-config configs/openthermalpose2_finetune_pose_highacc.yaml \
+  --train-output outputs/pose_high_accuracy \
+  --benchmark-output outputs/otp2_test_benchmark_pose_high_accuracy \
+  --test-images-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/images \
+  --test-labels-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/labels
+```
