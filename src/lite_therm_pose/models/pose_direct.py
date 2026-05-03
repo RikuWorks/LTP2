@@ -20,6 +20,13 @@ BODY_PART_GROUPS: dict[str, tuple[int, ...]] = {
 }
 
 
+def _valid_group_count(channels: int, preferred: int = 8) -> int:
+    for groups in range(min(preferred, channels), 0, -1):
+        if channels % groups == 0:
+            return groups
+    return 1
+
+
 def is_direct_pose_model_name(model_name: str) -> bool:
     return model_name.endswith("_direct") or "_direct_" in model_name
 
@@ -52,7 +59,7 @@ class DirectPoseRegressor(nn.Module):
         self.high_attn = ChannelAttention(self.backbone.out_channels)
         self.low_proj = nn.Sequential(
             nn.Conv2d(self.backbone.low_level_channels, low_hidden, kernel_size=1, bias=False),
-            nn.GroupNorm(8 if low_hidden >= 8 else 1, low_hidden),
+            nn.GroupNorm(_valid_group_count(low_hidden), low_hidden),
             nn.GELU(),
         )
         self.pre_norm = nn.LayerNorm(fused_dim)
