@@ -566,6 +566,26 @@ heatmap ではなく、人物 crop から 17 点の正規化座標と可視性�
 
 - `pose_resnet101_se_thermal_direct`
 
+比較用に 5 モデルの direct スイートも追加しています。
+
+- `pose_resnet50_se_direct`
+- `pose_resnet101_se_direct`
+- `pose_resnet152_se_direct`
+- `pose_resnet50_se_thermal_direct`
+- `pose_resnet101_se_thermal_direct`
+
+まとめて回す場合:
+
+```bash
+python run_pose_direct_suite.py \
+  --pretrain-config configs/coco_pretrain_pose_direct.yaml \
+  --finetune-config configs/openthermalpose2_finetune_pose_direct.yaml \
+  --train-output outputs/pose_direct_suite \
+  --benchmark-output outputs/otp2_test_benchmark_pose_direct_suite \
+  --test-images-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/images \
+  --test-labels-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/labels
+```
+
 一発実行:
 
 ```bash
