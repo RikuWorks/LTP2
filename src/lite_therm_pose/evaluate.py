@@ -19,6 +19,18 @@ from .profile import peak_memory_mb, reset_peak_memory
 from .utils import box_iou_xyxy, ensure_dir, load_image, resize_and_normalize
 
 
+HEAD_INDICES = (0, 1, 2, 3, 4)
+
+
+def _head_size_from_gt(keypoint_xy: np.ndarray, keypoint_visible: np.ndarray, bbox_size: np.ndarray) -> float:
+    visible_head = keypoint_xy[list(HEAD_INDICES)][keypoint_visible[list(HEAD_INDICES)] > 0]
+    if visible_head.shape[0] >= 2:
+        width = float(visible_head[:, 0].max() - visible_head[:, 0].min())
+        height = float(visible_head[:, 1].max() - visible_head[:, 1].min())
+        return max(width, height, 1.0)
+    return max(0.3 * max(float(bbox_size[0]), float(bbox_size[1])), 1.0)
+
+
 def evaluate_detector_model(model: TinyPersonDetector, cfg: ExperimentConfig) -> dict[str, float]:
     device = next(model.parameters()).device
     dataset_cfg = cfg.dataset
@@ -58,22 +70,27 @@ def evaluate_detector_model(model: TinyPersonDetector, cfg: ExperimentConfig) ->
     }
 
 
-def _pose_metrics_from_batch(preds: list, batch: dict[str, torch.Tensor]) -> tuple[list[float], list[float]]:
+def _pose_metrics_from_batch(preds: list, batch: dict[str, torch.Tensor]) -> tuple[list[float], list[float], list[float], list[float]]:
     pck = []
+    pckh50 = []
+    pckh30 = []
     vis_acc = []
     gt_xy = batch["keypoint_xy"].cpu().numpy()
     gt_visible = batch["keypoint_visible"].cpu().numpy()
     bbox_size = batch["bbox_size"].cpu().numpy()
     for sample_idx, pred in enumerate(preds):
         diag = float(max(bbox_size[sample_idx][0], bbox_size[sample_idx][1], 1.0))
+        head_size = _head_size_from_gt(gt_xy[sample_idx], gt_visible[sample_idx], bbox_size[sample_idx])
         pred_xy = pred.keypoints.cpu().numpy()
         pred_vis = pred.keypoint_visibility.cpu().numpy()
         dist = np.linalg.norm(pred_xy - gt_xy[sample_idx], axis=1)
         visible_mask = gt_visible[sample_idx] > 0
         if visible_mask.any():
             pck.append(float(np.mean((dist[visible_mask] / diag) <= 0.2)))
+            pckh50.append(float(np.mean((dist[visible_mask] / head_size) <= 0.5)))
+            pckh30.append(float(np.mean((dist[visible_mask] / head_size) <= 0.3)))
         vis_acc.append(float(np.mean((pred_vis >= 0.5) == visible_mask)))
-    return pck, vis_acc
+    return pck, pckh50, pckh30, vis_acc
 
 
 def evaluate_pose_model(model: TopDownPoseCNN, cfg: ExperimentConfig) -> dict[str, float]:
@@ -85,6 +102,8 @@ def evaluate_pose_model(model: TopDownPoseCNN, cfg: ExperimentConfig) -> dict[st
     loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device, shuffle=False)
     model.eval()
     all_pck = []
+    all_pckh50 = []
+    all_pckh30 = []
     all_vis = []
     batch_latencies = []
     reset_peak_memory(device)
@@ -96,13 +115,17 @@ def evaluate_pose_model(model: TopDownPoseCNN, cfg: ExperimentConfig) -> dict[st
             boxes = batch["crop_box"].to(device)
             preds = decode_pose_outputs(model, model(images), boxes, cfg.dataset.image_size, cfg.dataset.body_parts)
             batch_latencies.append(time.perf_counter() - batch_start)
-            pck, vis_acc = _pose_metrics_from_batch(preds, batch)
+            pck, pckh50, pckh30, vis_acc = _pose_metrics_from_batch(preds, batch)
             all_pck.extend(pck)
+            all_pckh50.extend(pckh50)
+            all_pckh30.extend(pckh30)
             all_vis.extend(vis_acc)
     elapsed = time.perf_counter() - start
     count = max(len(dataset), 1)
     return {
         "pose_pck20": float(np.mean(all_pck) if all_pck else 0.0),
+        "pose_pckh50": float(np.mean(all_pckh50) if all_pckh50 else 0.0),
+        "pose_pckh30": float(np.mean(all_pckh30) if all_pckh30 else 0.0),
         "pose_visibility_acc": float(np.mean(all_vis) if all_vis else 0.0),
         "pose_fps": count / max(elapsed, 1e-6),
         "pose_latency_ms": 1000.0 * float(np.mean(batch_latencies) if batch_latencies else 0.0),
@@ -120,6 +143,8 @@ def evaluate_joint_pipeline(detector: TinyPersonDetector, pose_model: TopDownPos
     detector.eval()
     pose_model.eval()
     pck = []
+    pckh50 = []
+    pckh30 = []
     latencies = []
     reset_peak_memory(detector_device)
     if pose_device != detector_device:
@@ -161,14 +186,19 @@ def evaluate_joint_pipeline(detector: TinyPersonDetector, pose_model: TopDownPos
             gt_xy = gt_kp[:, :2]
             visible = gt_kp[:, 2] > 0
             diag = max(x2 - x1, y2 - y1, 1)
+            head_size = _head_size_from_gt(gt_xy, gt_kp[:, 2], np.array([max(x2 - x1, 1), max(y2 - y1, 1)], dtype=np.float32))
             if visible.any():
                 dist = np.linalg.norm(pred_xy - gt_xy, axis=1)
                 pck.append(float(np.mean((dist[visible] / diag) <= 0.2)))
+                pckh50.append(float(np.mean((dist[visible] / head_size) <= 0.5)))
+                pckh30.append(float(np.mean((dist[visible] / head_size) <= 0.3)))
             latencies.append(time.perf_counter() - sample_start)
     elapsed = time.perf_counter() - start
     count = max(len(records), 1)
     return {
         "joint_score": float(np.mean(pck) if pck else 0.0),
+        "joint_pckh50": float(np.mean(pckh50) if pckh50 else 0.0),
+        "joint_pckh30": float(np.mean(pckh30) if pckh30 else 0.0),
         "joint_fps": count / max(elapsed, 1e-6),
         "joint_latency_ms": 1000.0 * float(np.mean(latencies) if latencies else 0.0),
         "joint_peak_memory_mb": max(peak_memory_mb(detector_device), peak_memory_mb(pose_device)),
