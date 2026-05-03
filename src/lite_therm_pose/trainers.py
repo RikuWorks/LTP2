@@ -9,7 +9,8 @@ from .config import ExperimentConfig
 from .data import DetectorDataset, PoseDataset
 from .engine import make_loader, train_loop
 from .models.detector import TinyPersonDetector, detector_loss
-from .models.pose_topdown import TopDownPoseCNN, pose_loss
+from .models.pose_direct import create_pose_model, pose_objective
+from .models.pose_topdown import TopDownPoseCNN
 from .resume import load_initial_weights_if_needed, try_resume_training
 from .runtime import resolve_model_device
 
@@ -25,7 +26,7 @@ def build_pose_model(cfg: ExperimentConfig) -> tuple[TopDownPoseCNN, torch.devic
     device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
     in_channels = 1 if cfg.dataset.grayscale else 3
     model_name = cfg.model.pose_name or cfg.model.name
-    return TopDownPoseCNN(
+    return create_pose_model(
         num_keypoints=cfg.dataset.num_keypoints,
         num_parts=len(cfg.dataset.body_parts),
         in_channels=in_channels,
@@ -71,7 +72,7 @@ def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "")
         model,
         loader,
         optimizer,
-        pose_loss,
+        pose_objective(model),
         device,
         cfg.optim.epochs,
         output_dir,

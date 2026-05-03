@@ -13,7 +13,8 @@ from .data import DetectorDataset, PoseDataset
 from .data.common import load_coco_records
 from .engine import make_loader
 from .models.detector import TinyPersonDetector, decode_detections
-from .models.pose_topdown import TopDownPoseCNN, decode_pose
+from .models.pose_direct import decode_pose_outputs
+from .models.pose_topdown import TopDownPoseCNN
 from .profile import peak_memory_mb, reset_peak_memory
 from .utils import box_iou_xyxy, ensure_dir, load_image, resize_and_normalize
 
@@ -93,7 +94,7 @@ def evaluate_pose_model(model: TopDownPoseCNN, cfg: ExperimentConfig) -> dict[st
             batch_start = time.perf_counter()
             images = batch["image"].to(device)
             boxes = batch["crop_box"].to(device)
-            preds = decode_pose(model(images), boxes, cfg.dataset.image_size, cfg.dataset.body_parts)
+            preds = decode_pose_outputs(model, model(images), boxes, cfg.dataset.image_size, cfg.dataset.body_parts)
             batch_latencies.append(time.perf_counter() - batch_start)
             pck, vis_acc = _pose_metrics_from_batch(preds, batch)
             all_pck.extend(pck)
@@ -148,7 +149,8 @@ def evaluate_joint_pipeline(detector: TinyPersonDetector, pose_model: TopDownPos
                 continue
             pose_input, _, _ = resize_and_normalize(crop, dataset_cfg.image_size, dataset_cfg.grayscale)
             pose_tensor = torch.from_numpy(pose_input.transpose(2, 0, 1)).unsqueeze(0).to(pose_device)
-            pose_preds = decode_pose(
+            pose_preds = decode_pose_outputs(
+                pose_model,
                 pose_model(pose_tensor),
                 torch.tensor([[x1, y1, x2, y2]], device=pose_device, dtype=torch.float32),
                 dataset_cfg.image_size,

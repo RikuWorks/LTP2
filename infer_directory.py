@@ -8,7 +8,7 @@ import cv2
 from lite_therm_pose import load_config
 from lite_therm_pose.inference import RuntimeBundle, load_weights, run_topdown_inference
 from lite_therm_pose.models.detector import TinyPersonDetector
-from lite_therm_pose.models.pose_topdown import TopDownPoseCNN
+from lite_therm_pose.models.pose_direct import create_pose_model
 from lite_therm_pose.runtime import resolve_model_device
 from lite_therm_pose.utils import ensure_dir
 
@@ -39,12 +39,14 @@ def build_bundle(args: argparse.Namespace) -> RuntimeBundle:
     detector_device = resolve_model_device(cfg.runtime.detector_device, cfg.runtime.device, "detector")
     pose_device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
     in_channels = 1 if cfg.dataset.grayscale else 3
-    detector = TinyPersonDetector(in_channels=in_channels, model_name=cfg.model.name).to(detector_device).eval()
-    pose_model = TopDownPoseCNN(
+    detector_model_name = cfg.model.detector_name or cfg.model.name
+    pose_model_name = cfg.model.pose_name or cfg.model.name
+    detector = TinyPersonDetector(in_channels=in_channels, model_name=detector_model_name).to(detector_device).eval()
+    pose_model = create_pose_model(
         num_keypoints=cfg.dataset.num_keypoints,
         num_parts=len(cfg.dataset.body_parts),
         in_channels=in_channels,
-        model_name=cfg.model.name,
+        model_name=pose_model_name,
     ).to(pose_device).eval()
     load_weights(detector, args.detector)
     load_weights(pose_model, args.pose)

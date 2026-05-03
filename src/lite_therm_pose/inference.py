@@ -9,14 +9,14 @@ import torch
 from .checkpoints import load_flexible_state_dict
 from .config import DatasetConfig, DetectorConfig
 from .models.detector import TinyPersonDetector, decode_detections
-from .models.pose_topdown import TopDownPoseCNN, decode_pose
+from .models.pose_direct import decode_pose_outputs
 from .utils import draw_pose, resize_and_normalize
 
 
 @dataclass
 class RuntimeBundle:
     detector: TinyPersonDetector
-    pose_model: TopDownPoseCNN
+    pose_model: torch.nn.Module
     detector_device: torch.device
     pose_device: torch.device
     dataset_cfg: DatasetConfig
@@ -69,7 +69,8 @@ def run_topdown_inference(bundle: RuntimeBundle, frame: np.ndarray) -> np.ndarra
         return visual
     crop_tensor = torch.from_numpy(np.stack(crops)).to(bundle.pose_device)
     pose_preds = bundle.pose_model(crop_tensor)
-    poses = decode_pose(
+    poses = decode_pose_outputs(
+        bundle.pose_model,
         pose_preds,
         crop_boxes=torch.tensor(crop_boxes, device=bundle.pose_device, dtype=torch.float32),
         image_size=bundle.dataset_cfg.image_size,

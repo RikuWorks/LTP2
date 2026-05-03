@@ -19,7 +19,8 @@ from lite_therm_pose.checkpoints import load_flexible_state_dict
 from lite_therm_pose.data.otp2_test import OTP2TestImage, OTP2TestPerson, load_otp2_test_images
 from lite_therm_pose.inference import RuntimeBundle, run_topdown_inference
 from lite_therm_pose.models.detector import DetectorPrediction, TinyPersonDetector, decode_detections
-from lite_therm_pose.models.pose_topdown import PosePrediction, TopDownPoseCNN, decode_pose
+from lite_therm_pose.models.pose_direct import create_pose_model, decode_pose_outputs
+from lite_therm_pose.models.pose_topdown import PosePrediction
 from lite_therm_pose.profile import checkpoint_size_mb, parameter_stats, peak_memory_mb, reset_peak_memory
 from lite_therm_pose.runtime import resolve_model_device
 from lite_therm_pose.utils import box_iou_xyxy, draw_pose, ensure_dir, load_image, resize_and_normalize
@@ -109,7 +110,7 @@ def build_bundle(config_path: str, run: BenchmarkRun, detector_device_name: str,
     pose_device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
     in_channels = 1 if cfg.dataset.grayscale else 3
     detector = TinyPersonDetector(in_channels=in_channels, model_name=detector_model_name).to(detector_device).eval()
-    pose_model = TopDownPoseCNN(
+    pose_model = create_pose_model(
         num_keypoints=cfg.dataset.num_keypoints,
         num_parts=len(cfg.dataset.body_parts),
         in_channels=in_channels,
@@ -338,7 +339,8 @@ def predict_pose(bundle: RuntimeBundle, image: np.ndarray, crop_boxes_xyxy: list
         return []
     crop_tensor = torch.from_numpy(np.stack(crops)).to(bundle.pose_device)
     preds = bundle.pose_model(crop_tensor)
-    return decode_pose(
+    return decode_pose_outputs(
+        bundle.pose_model,
         preds,
         crop_boxes=torch.tensor(crop_boxes, device=bundle.pose_device, dtype=torch.float32),
         image_size=bundle.dataset_cfg.image_size,

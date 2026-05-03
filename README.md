@@ -529,3 +529,60 @@ python run_pose_high_accuracy_pipeline.py \
   --test-images-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/images \
   --test-labels-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/labels
 ```
+
+## Direct Pose回帰モデル
+heatmap ではなく、人物 crop から 17 点の正規化座標と可視性を直接回帰する pose モデルも使えます。
+既存の heatmap 系はそのまま残してあり、direct 系は別ファイル実装です。
+
+- `src/lite_therm_pose/models/pose_direct.py`
+- `configs/coco_pretrain_pose_direct.yaml`
+- `configs/openthermalpose2_finetune_pose_direct.yaml`
+- `run_pose_direct_pipeline.py`
+
+本命の direct モデル:
+
+- `pose_resnet101_se_thermal_direct`
+
+一発実行:
+
+```bash
+python run_pose_direct_pipeline.py \
+  --pretrain-config configs/coco_pretrain_pose_direct.yaml \
+  --finetune-config configs/openthermalpose2_finetune_pose_direct.yaml \
+  --train-output outputs/pose_direct \
+  --benchmark-output outputs/otp2_test_benchmark_pose_direct \
+  --test-images-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/images \
+  --test-labels-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/labels
+```
+
+個別に回す場合:
+
+```bash
+python train_detector.py \
+  --config configs/coco_pretrain_pose_direct.yaml \
+  --model pose_resnet101_se_thermal_direct \
+  --output outputs/pose_direct/pose_resnet101_se_thermal_direct/pretrain_detector
+```
+
+```bash
+python train_pose.py \
+  --config configs/coco_pretrain_pose_direct.yaml \
+  --model pose_resnet101_se_thermal_direct \
+  --output outputs/pose_direct/pose_resnet101_se_thermal_direct/pretrain_pose
+```
+
+```bash
+python train_detector.py \
+  --config configs/openthermalpose2_finetune_pose_direct.yaml \
+  --model pose_resnet101_se_thermal_direct \
+  --weights outputs/pose_direct/pose_resnet101_se_thermal_direct/pretrain_detector/detector_last.pt \
+  --output outputs/pose_direct/pose_resnet101_se_thermal_direct/finetune_detector
+```
+
+```bash
+python train_pose.py \
+  --config configs/openthermalpose2_finetune_pose_direct.yaml \
+  --model pose_resnet101_se_thermal_direct \
+  --weights outputs/pose_direct/pose_resnet101_se_thermal_direct/pretrain_pose/pose_last.pt \
+  --output outputs/pose_direct/pose_resnet101_se_thermal_direct/finetune_pose
+```
