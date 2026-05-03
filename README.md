@@ -641,3 +641,37 @@ python run_lwirpose_direct_from_otp.py \
 この流れでは、`outputs/pose_direct/pose_resnet101_se_thermal_direct/finetune_detector/detector_last.pt` と
 `outputs/pose_direct/pose_resnet101_se_thermal_direct/finetune_pose/pose_last.pt` を初期重みにして、
 LWIRPOSE の `S2-S7` で追加 fine-tune し、`S1` で評価します。
+
+## UCH-Thermal-Pose変換
+UCH-Thermal-Pose は COCO 互換 JSON に近い形式なので、画像パスを LiteThermPose 向けにそろえて使います。
+
+```bash
+python scripts/convert_uch_thermal_pose.py \
+  --source /home/motomochi/UCH-Thermal-Pose \
+  --target /home/motomochi/LTP2/data/uch_thermal_pose
+```
+
+これで次ができます。
+
+- `data/uch_thermal_pose/images/train/...`
+- `data/uch_thermal_pose/images/val/...`
+- `data/uch_thermal_pose/images/test/...`
+- `data/uch_thermal_pose/annotations/train.json`
+- `data/uch_thermal_pose/annotations/val.json`
+- `data/uch_thermal_pose/annotations/test.json`
+
+## UCH-Thermal-Poseでの最終ファインチューニング
+UCH-Thermal-Pose でも、OTP fine-tune 済み direct 重みを初期値として追加 fine-tune できます。
+
+- `configs/uch_thermal_pose_direct.yaml`
+- `run_uch_direct_from_otp.py`
+
+```bash
+python run_uch_direct_from_otp.py \
+  --config configs/uch_thermal_pose_direct.yaml \
+  --source-suite outputs/pose_direct \
+  --output outputs/uch_pose_direct_from_otp
+```
+
+この流れでは、`Set-A train` で fine-tune し、`Set-B test` を `val_annotation_file` として評価します。
+`summary.csv` には `pose_pckh50` と `joint_pckh50` も含まれます。
