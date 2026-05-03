@@ -1,0 +1,31 @@
+dataset:
+  image_root: data/lwirpose/images
+  annotation_file: data/lwirpose/annotations/train.json
+  val_image_root: data/lwirpose/images
+  val_annotation_file: data/lwirpose/annotations/val.json
+  image_size: [256, 192]
+  heatmap_size: [64, 48]
+  num_keypoints: 17
+  grayscale: true
+  body_parts: [head, torso, left_arm, right_arm, left_leg, right_leg]
+model:
+  name: pose_resnet101_se_thermal_direct
+optim:
+  batch_size: 8
+  epochs: 30
+  lr: 0.00025
+  weight_decay: 0.0001
+  workers: 4
+augmentation:
+  flip_prob: 0.5
+  scale_jitter: 0.12
+  rotate_deg: 8.0
+  partial_crop_prob: 0.1
+  intensity_jitter: 0.04
+detector:
+  image_size: [320, 320]
+  score_threshold: 0.2
+runtime:
+  device: auto
+  detector_device: cuda:0
+  pose_device: cuda:1

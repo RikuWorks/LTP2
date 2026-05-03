@@ -67,6 +67,29 @@ DOWNLOAD_JOBS=16 DOWNLOAD_SPLITS=16 ./scripts/download_datasets.sh all
 OpenThermalPose2 の注釈は COCO 互換を想定しています。`body_parts` を含めると部分検出学習にも使えます。
 COCO 事前学習時も、サーマル向けに合わせて入力画像は白黒化して学習します。
 
+## LWIRPOSE変換
+LWIRPOSE は `S1 ... S7` の被験者フォルダと、各動作フォルダ内の `IR` / `IR_posepoints` から成る構造なので、
+学習前に COCO 互換 JSON へ変換します。
+
+S1 を test、S2-S7 を train/fine-tune 用に使う場合:
+
+```bash
+python scripts/convert_lwirpose_to_coco.py \
+  --source /home/motomochi/LWIRPose \
+  --target /home/motomochi/LTP2/data/lwirpose \
+  --test-subjects S1
+```
+
+これで次ができます。
+
+- `data/lwirpose/images/train/...`
+- `data/lwirpose/images/test/...`
+- `data/lwirpose/annotations/train.json`
+- `data/lwirpose/annotations/val.json`
+- `data/lwirpose/annotations/test.json`
+
+`val.json` と `test.json` には S1 が入り、既存の評価系からそのまま test 相当として使えます。
+
 ## モデル一覧
 
 利用可能なモデル一覧:
@@ -586,3 +609,20 @@ python train_pose.py \
   --weights outputs/pose_direct/pose_resnet101_se_thermal_direct/pretrain_pose/pose_last.pt \
   --output outputs/pose_direct/pose_resnet101_se_thermal_direct/finetune_pose
 ```
+
+## LWIRPOSEでの最終ファインチューニング
+OpenThermalPose2 / COCO とは別に、LWIRPOSE の `S2-S7` を最終 fine-tune、`S1` を test として使うときは、
+direct 本命モデルを次で回せます。
+
+- `configs/lwirpose_finetune_pose_direct.yaml`
+- `run_lwirpose_direct_pipeline.py`
+
+```bash
+python run_lwirpose_direct_pipeline.py \
+  --pretrain-config configs/coco_pretrain_pose_direct.yaml \
+  --finetune-config configs/lwirpose_finetune_pose_direct.yaml \
+  --output outputs/lwirpose_pose_direct
+```
+
+この出力の `summary.csv` / `summary.md` は、`val_annotation_file=data/lwirpose/annotations/val.json`
+を使うので、そのまま `S1` に対する精度になります。
