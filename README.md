@@ -626,3 +626,18 @@ python run_lwirpose_direct_pipeline.py \
 
 この出力の `summary.csv` / `summary.md` は、`val_annotation_file=data/lwirpose/annotations/val.json`
 を使うので、そのまま `S1` に対する精度になります。
+
+OpenThermalPose2 で fine-tune 済みの direct 重みを初期値に使いたい場合は、こちらを使います。
+
+- `run_lwirpose_direct_from_otp.py`
+
+```bash
+python run_lwirpose_direct_from_otp.py \
+  --config configs/lwirpose_finetune_pose_direct.yaml \
+  --source-suite outputs/pose_direct \
+  --output outputs/lwirpose_pose_direct_from_otp
+```
+
+この流れでは、`outputs/pose_direct/pose_resnet101_se_thermal_direct/finetune_detector/detector_last.pt` と
+`outputs/pose_direct/pose_resnet101_se_thermal_direct/finetune_pose/pose_last.pt` を初期重みにして、
+LWIRPOSE の `S2-S7` で追加 fine-tune し、`S1` で評価します。
