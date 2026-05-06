@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import multiprocessing as mp
+import subprocess
+import sys
 from pathlib import Path
 
+import torch
 import yaml
 
 import benchmark_otp2_testset as otp2_bench
@@ -12,7 +14,7 @@ from lite_therm_pose import load_config
 from lite_therm_pose.evaluate import evaluate_detector_model, evaluate_joint_pipeline, evaluate_pose_model, write_summary_report
 from lite_therm_pose.profile import checkpoint_size_mb, parameter_stats
 from lite_therm_pose.runtime import resolve_model_device
-from lite_therm_pose.trainers import load_trained_detector, load_trained_pose, train_detector, train_pose
+from lite_therm_pose.trainers import load_trained_detector, load_trained_pose
 from lite_therm_pose.utils import dataclass_to_dict, ensure_dir
 
 
@@ -51,86 +53,115 @@ def save_cfg(cfg, path: Path) -> None:
     path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
-def _run_pose_job(cfg, output_dir: str, weights: str, queue: mp.Queue, kind: str) -> None:
-    try:
-        _, stats = train_pose(cfg, output_dir, weights=weights)
-        queue.put({"kind": kind, "stats": stats, "error": ""})
-    except Exception as exc:  # pragma: no cover
-        queue.put({"kind": kind, "stats": None, "error": repr(exc)})
-
-
-def _run_detector_job(cfg, output_dir: str, weights: str, queue: mp.Queue, kind: str) -> None:
-    try:
-        _, stats = train_detector(cfg, output_dir, weights=weights)
-        queue.put({"kind": kind, "stats": stats, "error": ""})
-    except Exception as exc:  # pragma: no cover
-        queue.put({"kind": kind, "stats": None, "error": repr(exc)})
-
-
 def _supports_parallel(pretrain_cfg, finetune_cfg) -> bool:
     pose_device = resolve_model_device(pretrain_cfg.runtime.pose_device, pretrain_cfg.runtime.device, "pose")
     detector_device = resolve_model_device(finetune_cfg.runtime.detector_device, finetune_cfg.runtime.device, "detector")
     return pose_device.type == "cuda" and detector_device.type == "cuda" and pose_device != detector_device
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _python_executable() -> str:
+    return sys.executable
+
+
+def _pose_train_command(config_path: Path, output_dir: Path, weights: str = "") -> list[str]:
+    command = [
+        _python_executable(),
+        str(_repo_root() / "train_pose.py"),
+        "--config",
+        str(config_path),
+        "--model",
+        POSE_MODEL,
+        "--output",
+        str(output_dir),
+    ]
+    if weights:
+        command.extend(["--weights", weights])
+    return command
+
+
+def _detector_train_command(config_path: Path, output_dir: Path, weights: str) -> list[str]:
+    command = [
+        _python_executable(),
+        str(_repo_root() / "train_detector.py"),
+        "--config",
+        str(config_path),
+        "--model",
+        POSE_MODEL,
+        "--output",
+        str(output_dir),
+    ]
+    if weights:
+        command.extend(["--weights", weights])
+    return command
+
+
+def _run_command(command: list[str], label: str) -> None:
+    process = subprocess.run(command, cwd=_repo_root(), check=False)
+    if process.returncode != 0:
+        raise RuntimeError(f"{label} failed with exit code {process.returncode}")
+
+
+def _read_training_stats(output_dir: Path, checkpoint_name: str) -> dict[str, float | list[float]]:
+    checkpoint_path = output_dir / checkpoint_name
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Expected checkpoint was not found: {checkpoint_path}")
+    payload = torch.load(str(checkpoint_path), map_location="cpu")
+    epoch = int(payload.get("epoch", 0)) if isinstance(payload, dict) else 0
+    return {
+        "loss_history": [],
+        "train_seconds_total": 0.0,
+        "epoch_seconds_mean": 0.0,
+        "train_peak_memory_mb": 0.0,
+        "completed_epochs": epoch,
+    }
+
+
 def run_training(args: argparse.Namespace) -> Path:
     pretrain_cfg = prepare_cfg(args.pretrain_config, args)
     finetune_cfg = prepare_cfg(args.finetune_config, args)
     root = ensure_dir(Path(args.train_output) / POSE_MODEL)
+    effective_pretrain_cfg = root / "effective_pretrain_config.yaml"
+    effective_finetune_cfg = root / "effective_finetune_config.yaml"
+    save_cfg(pretrain_cfg, effective_pretrain_cfg)
+    save_cfg(finetune_cfg, effective_finetune_cfg)
     pose_pre_dir = root / "pretrain_pose"
     det_fine_dir = root / "finetune_detector"
     pose_fine_dir = root / "finetune_pose"
 
     if _supports_parallel(pretrain_cfg, finetune_cfg):
-        ctx = mp.get_context("spawn")
-        queue: mp.Queue = ctx.Queue()
-        processes: list[mp.Process] = []
-
-        pose_pre_proc = ctx.Process(
-            target=_run_pose_job,
-            args=(pretrain_cfg, str(pose_pre_dir), "", queue, "pose_pre"),
+        pose_pre_proc = subprocess.Popen(
+            _pose_train_command(effective_pretrain_cfg, pose_pre_dir),
+            cwd=_repo_root(),
         )
-        det_fine_proc = ctx.Process(
-            target=_run_detector_job,
-            args=(finetune_cfg, str(det_fine_dir), args.yolov5_weights, queue, "det_fine"),
+        det_fine_proc = subprocess.Popen(
+            _detector_train_command(effective_finetune_cfg, det_fine_dir, args.yolov5_weights),
+            cwd=_repo_root(),
         )
-        pose_pre_proc.start()
-        det_fine_proc.start()
-        processes.extend([pose_pre_proc, det_fine_proc])
-
-        stats_map: dict[str, dict] = {}
-        pose_fine_started = False
-        while len(stats_map) < 3:
-            item = queue.get()
-            if item["error"]:
-                for proc in processes:
-                    if proc.is_alive():
-                        proc.terminate()
-                for proc in processes:
-                    proc.join(timeout=1)
-                raise RuntimeError(f"{item['kind']} training failed: {item['error']}")
-            stats_map[item["kind"]] = item["stats"]
-            if item["kind"] == "pose_pre" and not pose_fine_started:
-                pose_fine_proc = ctx.Process(
-                    target=_run_pose_job,
-                    args=(finetune_cfg, str(pose_fine_dir), str(pose_pre_dir / "pose_last.pt"), queue, "pose_fine"),
-                )
-                pose_fine_proc.start()
-                processes.append(pose_fine_proc)
-                pose_fine_started = True
-
-        for proc in processes:
-            proc.join()
-            if proc.exitcode != 0:
-                raise RuntimeError(f"parallel training process failed with exit code {proc.exitcode}")
-
-        pose_pre_stats = stats_map["pose_pre"]
-        det_fine_stats = stats_map["det_fine"]
-        pose_fine_stats = stats_map["pose_fine"]
+        pose_pre_code = pose_pre_proc.wait()
+        det_fine_code = det_fine_proc.wait()
+        if pose_pre_code != 0:
+            raise RuntimeError(f"pose_pre failed with exit code {pose_pre_code}")
+        if det_fine_code != 0:
+            raise RuntimeError(f"det_fine failed with exit code {det_fine_code}")
+        _run_command(
+            _pose_train_command(effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
+            "pose_fine",
+        )
     else:
-        _, pose_pre_stats = train_pose(pretrain_cfg, pose_pre_dir)
-        _, det_fine_stats = train_detector(finetune_cfg, det_fine_dir, weights=args.yolov5_weights)
-        _, pose_fine_stats = train_pose(finetune_cfg, pose_fine_dir, weights=str(pose_pre_dir / "pose_last.pt"))
+        _run_command(_pose_train_command(effective_pretrain_cfg, pose_pre_dir), "pose_pre")
+        _run_command(_detector_train_command(effective_finetune_cfg, det_fine_dir, args.yolov5_weights), "det_fine")
+        _run_command(
+            _pose_train_command(effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
+            "pose_fine",
+        )
+
+    pose_pre_stats = _read_training_stats(pose_pre_dir, "pose_last.pt")
+    det_fine_stats = _read_training_stats(det_fine_dir, "detector_last.pt")
+    pose_fine_stats = _read_training_stats(pose_fine_dir, "pose_last.pt")
 
     detector = load_trained_detector(finetune_cfg, det_fine_dir / "detector_last.pt")
     pose = load_trained_pose(finetune_cfg, pose_fine_dir / "pose_last.pt")
@@ -166,9 +197,7 @@ def run_training(args: argparse.Namespace) -> Path:
     write_summary_report([row], root)
     with (root / "metrics.json").open("w", encoding="utf-8") as handle:
         json.dump(row, handle, ensure_ascii=False, indent=2)
-    effective_cfg = root / "effective_finetune_config.yaml"
-    save_cfg(finetune_cfg, effective_cfg)
-    return effective_cfg
+    return effective_finetune_cfg
 
 
 def run_benchmark(args: argparse.Namespace, config_path: Path) -> None:
