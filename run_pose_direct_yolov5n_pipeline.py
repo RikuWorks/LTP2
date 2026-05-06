@@ -17,12 +17,9 @@ from lite_therm_pose.runtime import resolve_model_device
 from lite_therm_pose.trainers import load_trained_detector, load_trained_pose
 from lite_therm_pose.utils import dataclass_to_dict, ensure_dir
 
-
-POSE_MODEL = "pose_resnet50_se_direct_refine"
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train one improved direct pose model with a YOLOv5n detector and benchmark it on OTP2 test.")
+    parser.add_argument("--model", type=str, default="pose_resnet50_se_direct_refine")
     parser.add_argument("--pretrain-config", type=str, default="configs/coco_pretrain_pose_direct_yolov5n.yaml")
     parser.add_argument("--finetune-config", type=str, default="configs/openthermalpose2_finetune_pose_direct_yolov5n.yaml")
     parser.add_argument("--train-output", type=str, default="outputs/pose_direct_yolov5n")
@@ -36,12 +33,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu-device", type=str, default="cpu")
     parser.add_argument("--visual-samples", type=int, default=4)
     parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("--gpu-only", action="store_true", help="Skip CPU runtime benchmarking and record GPU-only speed columns.")
     return parser.parse_args()
 
 
-def prepare_cfg(path: str, args: argparse.Namespace):
+def prepare_cfg(path: str, args: argparse.Namespace, model_name: str):
     cfg = load_config(path)
-    cfg.model.name = POSE_MODEL
+    cfg.model.name = model_name
     cfg.detector.backend = "yolov5n"
     cfg.detector.yolov5_repo = args.yolov5_repo
     cfg.detector.yolov5_weights = args.yolov5_weights
@@ -67,14 +65,14 @@ def _python_executable() -> str:
     return sys.executable
 
 
-def _pose_train_command(config_path: Path, output_dir: Path, weights: str = "") -> list[str]:
+def _pose_train_command(model_name: str, config_path: Path, output_dir: Path, weights: str = "") -> list[str]:
     command = [
         _python_executable(),
         str(_repo_root() / "train_pose.py"),
         "--config",
         str(config_path),
         "--model",
-        POSE_MODEL,
+        model_name,
         "--output",
         str(output_dir),
     ]
@@ -83,14 +81,14 @@ def _pose_train_command(config_path: Path, output_dir: Path, weights: str = "") 
     return command
 
 
-def _detector_train_command(config_path: Path, output_dir: Path, weights: str) -> list[str]:
+def _detector_train_command(model_name: str, config_path: Path, output_dir: Path, weights: str) -> list[str]:
     command = [
         _python_executable(),
         str(_repo_root() / "train_detector.py"),
         "--config",
         str(config_path),
         "--model",
-        POSE_MODEL,
+        model_name,
         "--output",
         str(output_dir),
     ]
@@ -151,9 +149,10 @@ def _read_training_stats(output_dir: Path, checkpoint_name: str) -> dict[str, fl
 
 
 def run_training(args: argparse.Namespace) -> Path:
-    pretrain_cfg = prepare_cfg(args.pretrain_config, args)
-    finetune_cfg = prepare_cfg(args.finetune_config, args)
-    root = ensure_dir(Path(args.train_output) / POSE_MODEL)
+    model_name = args.model
+    pretrain_cfg = prepare_cfg(args.pretrain_config, args, model_name)
+    finetune_cfg = prepare_cfg(args.finetune_config, args, model_name)
+    root = ensure_dir(Path(args.train_output) / model_name)
     effective_pretrain_cfg = root / "effective_pretrain_config.yaml"
     effective_finetune_cfg = root / "effective_finetune_config.yaml"
     save_cfg(pretrain_cfg, effective_pretrain_cfg)
@@ -164,11 +163,11 @@ def run_training(args: argparse.Namespace) -> Path:
 
     if _supports_parallel(pretrain_cfg, finetune_cfg):
         pose_pre_proc = subprocess.Popen(
-            _pose_train_command(effective_pretrain_cfg, pose_pre_dir),
+            _pose_train_command(model_name, effective_pretrain_cfg, pose_pre_dir),
             cwd=_repo_root(),
         )
         det_fine_proc = subprocess.Popen(
-            _detector_train_command(effective_finetune_cfg, det_fine_dir, args.yolov5_weights),
+            _detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights),
             cwd=_repo_root(),
         )
         pose_pre_code = pose_pre_proc.wait()
@@ -178,14 +177,14 @@ def run_training(args: argparse.Namespace) -> Path:
         if det_fine_code != 0:
             raise RuntimeError(f"det_fine failed with exit code {det_fine_code}")
         _run_command(
-            _pose_train_command(effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
+            _pose_train_command(model_name, effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
             "pose_fine",
         )
     else:
-        _run_command(_pose_train_command(effective_pretrain_cfg, pose_pre_dir), "pose_pre")
-        _run_command(_detector_train_command(effective_finetune_cfg, det_fine_dir, args.yolov5_weights), "det_fine")
+        _run_command(_pose_train_command(model_name, effective_pretrain_cfg, pose_pre_dir), "pose_pre")
+        _run_command(_detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights), "det_fine")
         _run_command(
-            _pose_train_command(effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
+            _pose_train_command(model_name, effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
             "pose_fine",
         )
 
@@ -201,7 +200,7 @@ def run_training(args: argparse.Namespace) -> Path:
     detector_profile = parameter_stats(detector, "detector")
     pose_profile = parameter_stats(pose, "pose")
     row = {
-        "model": POSE_MODEL,
+        "model": model_name,
         "model_family": "pose",
         "det_pre_loss": 0.0,
         "pose_pre_loss": round(float(pose_pre_stats["loss_history"][-1]), 6) if pose_pre_stats["loss_history"] else 0.0,
@@ -235,7 +234,7 @@ def run_benchmark(args: argparse.Namespace, config_path: Path) -> None:
         config=str(config_path),
         suite_dir=[args.train_output],
         output=args.benchmark_output,
-        models=POSE_MODEL,
+        models=args.model,
         test_images_dir=args.test_images_dir,
         test_labels_dir=args.test_labels_dir,
         search_root=args.search_root,
@@ -243,9 +242,10 @@ def run_benchmark(args: argparse.Namespace, config_path: Path) -> None:
         cpu_device=args.cpu_device,
         visual_samples=args.visual_samples,
         warmup=args.warmup,
+        gpu_only=args.gpu_only,
     )
     output_dir = otp2_bench.ensure_dir(bench_args.output)
-    runs = otp2_bench.discover_runs(bench_args.suite_dir, {POSE_MODEL})
+    runs = otp2_bench.discover_runs(bench_args.suite_dir, {args.model})
     if not runs:
         raise FileNotFoundError("No runnable model checkpoints were found after training.")
     test_images = otp2_bench.load_otp2_test_images(
@@ -268,8 +268,10 @@ def run_benchmark(args: argparse.Namespace, config_path: Path) -> None:
         _, det_coco_stats = otp2_bench._run_cocoeval(coco_gt, bbox_results, "bbox")
         _, pose_coco_stats = otp2_bench._run_cocoeval(coco_gt, keypoint_results, "keypoints")
         pose_mean_oks = otp2_bench.compute_mean_oks(test_images, joint_pose_predictions)
-        cpu_bundle = otp2_bench.build_bundle(bench_args.config, run, bench_args.cpu_device, bench_args.cpu_device, draw_parts=False)
-        cpu_speed = otp2_bench.benchmark_runtime(cpu_bundle, test_images, warmup=bench_args.warmup)
+        cpu_speed = {}
+        if not bench_args.gpu_only:
+            cpu_bundle = otp2_bench.build_bundle(bench_args.config, run, bench_args.cpu_device, bench_args.cpu_device, draw_parts=False)
+            cpu_speed = otp2_bench.benchmark_runtime(cpu_bundle, test_images, warmup=bench_args.warmup)
         gpu_speed = {}
         if gpu_available:
             gpu_bundle = otp2_bench.build_bundle(bench_args.config, run, bench_args.gpu_device, bench_args.gpu_device, draw_parts=False)
@@ -290,13 +292,13 @@ def run_benchmark(args: argparse.Namespace, config_path: Path) -> None:
                 **det_coco_stats,
                 **pose_coco_stats,
                 "pose_mean_oks_test": pose_mean_oks,
-                "cpu_det_fps_images": cpu_speed["det_fps_images"],
-                "cpu_det_latency_ms_test": cpu_speed["det_latency_ms_test"],
-                "cpu_pose_fps_images": cpu_speed["pose_fps_images"],
-                "cpu_pose_fps_persons": cpu_speed["pose_fps_persons"],
-                "cpu_pose_latency_ms_test": cpu_speed["pose_latency_ms_test"],
-                "cpu_joint_fps_images": cpu_speed["joint_fps_images"],
-                "cpu_joint_latency_ms_test": cpu_speed["joint_latency_ms_test"],
+                "cpu_det_fps_images": cpu_speed.get("det_fps_images", 0.0),
+                "cpu_det_latency_ms_test": cpu_speed.get("det_latency_ms_test", 0.0),
+                "cpu_pose_fps_images": cpu_speed.get("pose_fps_images", 0.0),
+                "cpu_pose_fps_persons": cpu_speed.get("pose_fps_persons", 0.0),
+                "cpu_pose_latency_ms_test": cpu_speed.get("pose_latency_ms_test", 0.0),
+                "cpu_joint_fps_images": cpu_speed.get("joint_fps_images", 0.0),
+                "cpu_joint_latency_ms_test": cpu_speed.get("joint_latency_ms_test", 0.0),
                 "gpu_det_fps_images": gpu_speed.get("det_fps_images", 0.0),
                 "gpu_det_latency_ms_test": gpu_speed.get("det_latency_ms_test", 0.0),
                 "gpu_det_peak_memory_mb_test": gpu_speed.get("det_peak_memory_mb_test", 0.0),
@@ -319,7 +321,7 @@ def run_benchmark(args: argparse.Namespace, config_path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    print("pose model:", POSE_MODEL)
+    print("pose model:", args.model)
     config_path = run_training(args)
     run_benchmark(args, config_path)
 

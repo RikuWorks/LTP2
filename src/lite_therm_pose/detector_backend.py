@@ -196,7 +196,7 @@ def _export_split_to_yolo(dataset_cfg: DatasetConfig, split_name: str, root: Pat
             image_name = f"{image_id}_{src.name}"
             dst_image = images_dir / image_name
             _link_or_copy(src, dst_image)
-            listing.write(str(dst_image.resolve()) + "\n")
+            listing.write(str(dst_image) + "\n")
             image = cv2.imread(str(src), cv2.IMREAD_COLOR)
             if image is None:
                 raise FileNotFoundError(src)

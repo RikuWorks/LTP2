@@ -47,10 +47,10 @@ def run_topdown_inference(bundle: RuntimeBundle, frame: np.ndarray) -> np.ndarra
     crop_boxes = []
     for box in dets.boxes.cpu().tolist():
         x1, y1, x2, y2 = box
-        x1 = int(round(x1 / max(scale_x, 1.0e-6)))
-        y1 = int(round(y1 / max(scale_y, 1.0e-6)))
-        x2 = int(round(x2 / max(scale_x, 1.0e-6)))
-        y2 = int(round(y2 / max(scale_y, 1.0e-6)))
+        x1 = int(round(x1))
+        y1 = int(round(y1))
+        x2 = int(round(x2))
+        y2 = int(round(y2))
         x1 = max(x1, 0)
         y1 = max(y1, 0)
         x2 = min(max(x2, x1 + 1), frame.shape[1])

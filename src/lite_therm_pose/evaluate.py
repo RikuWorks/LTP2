@@ -17,7 +17,7 @@ from .models.detector import TinyPersonDetector
 from .models.pose_direct import decode_pose_outputs
 from .models.pose_topdown import TopDownPoseCNN
 from .profile import peak_memory_mb, reset_peak_memory
-from .utils import box_iou_xyxy, ensure_dir, load_image
+from .utils import box_iou_xyxy, ensure_dir, load_image, resize_and_normalize
 
 
 HEAD_INDICES = (0, 1, 2, 3, 4)
