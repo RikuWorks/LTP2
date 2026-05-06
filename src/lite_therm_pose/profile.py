@@ -5,10 +5,15 @@ from pathlib import Path
 import torch
 
 
+def _parameter_source(model: torch.nn.Module) -> torch.nn.Module:
+    return getattr(model, "parameter_source", model)
+
+
 def parameter_stats(model: torch.nn.Module, prefix: str) -> dict[str, float]:
-    total = sum(param.numel() for param in model.parameters())
-    trainable = sum(param.numel() for param in model.parameters() if param.requires_grad)
-    size_mb = sum(param.numel() * param.element_size() for param in model.parameters()) / (1024 ** 2)
+    source = _parameter_source(model)
+    total = sum(param.numel() for param in source.parameters())
+    trainable = sum(param.numel() for param in source.parameters() if param.requires_grad)
+    size_mb = sum(param.numel() * param.element_size() for param in source.parameters()) / (1024 ** 2)
     return {
         f"{prefix}_params_m": total / 1_000_000.0,
         f"{prefix}_trainable_params_m": trainable / 1_000_000.0,

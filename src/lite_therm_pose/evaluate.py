@@ -11,12 +11,13 @@ import torch
 from .config import ExperimentConfig
 from .data import DetectorDataset, PoseDataset
 from .data.common import load_coco_records
+from .detector_backend import detector_device, predict_detector_image
 from .engine import make_loader
-from .models.detector import TinyPersonDetector, decode_detections
+from .models.detector import TinyPersonDetector
 from .models.pose_direct import decode_pose_outputs
 from .models.pose_topdown import TopDownPoseCNN
 from .profile import peak_memory_mb, reset_peak_memory
-from .utils import box_iou_xyxy, ensure_dir, load_image, resize_and_normalize
+from .utils import box_iou_xyxy, ensure_dir, load_image
 
 
 HEAD_INDICES = (0, 1, 2, 3, 4)
@@ -32,40 +33,40 @@ def _head_size_from_gt(keypoint_xy: np.ndarray, keypoint_visible: np.ndarray, bb
 
 
 def evaluate_detector_model(model: TinyPersonDetector, cfg: ExperimentConfig) -> dict[str, float]:
-    device = next(model.parameters()).device
+    device = detector_device(model)
     dataset_cfg = cfg.dataset
     if dataset_cfg.val_annotation_file and Path(dataset_cfg.val_annotation_file).exists():
         dataset_cfg = type(cfg.dataset)(**{**cfg.dataset.__dict__, "annotation_file": cfg.dataset.val_annotation_file, "image_root": cfg.dataset.val_image_root or cfg.dataset.image_root})
-    dataset = DetectorDataset(dataset_cfg, cfg.detector, cfg.augmentation)
-    loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device, shuffle=False)
-    model.eval()
     recalls = []
     ious = []
-    batch_latencies = []
+    latencies = []
+    eval_cfg = type("EvalCfg", (), {})()
+    eval_cfg.dataset = dataset_cfg
+    eval_cfg.detector = cfg.detector
     reset_peak_memory(device)
     start = time.perf_counter()
+    records = load_coco_records(dataset_cfg)
     with torch.no_grad():
-        for batch in loader:
-            batch_start = time.perf_counter()
-            images = batch["image"].to(device)
-            gt_boxes = batch["gt_bbox"].to(device)
-            preds = decode_detections(model(images), cfg.detector.stride, cfg.detector.score_threshold, cfg.detector.nms_iou_threshold, cfg.detector.max_detections)
-            batch_latencies.append(time.perf_counter() - batch_start)
-            for pred, gt_box in zip(preds, gt_boxes):
-                if pred.boxes.numel() == 0:
-                    recalls.append(0.0)
-                    ious.append(0.0)
-                    continue
-                iou = box_iou_xyxy(pred.boxes, gt_box.unsqueeze(0)).max().item()
-                recalls.append(1.0 if iou >= 0.5 else 0.0)
-                ious.append(iou)
+        for record in records:
+            image = load_image(record.image_path, grayscale=dataset_cfg.grayscale)
+            gt_box = torch.tensor([[record.bbox[0], record.bbox[1], record.bbox[0] + record.bbox[2], record.bbox[1] + record.bbox[3]]], dtype=torch.float32)
+            sample_start = time.perf_counter()
+            pred = predict_detector_image(model, eval_cfg, image)
+            latencies.append(time.perf_counter() - sample_start)
+            if pred.boxes.numel() == 0:
+                recalls.append(0.0)
+                ious.append(0.0)
+                continue
+            iou = box_iou_xyxy(pred.boxes.float(), gt_box.float()).max().item()
+            recalls.append(1.0 if iou >= 0.5 else 0.0)
+            ious.append(iou)
     elapsed = time.perf_counter() - start
-    count = max(len(dataset), 1)
+    count = max(len(records), 1)
     return {
         "det_recall50": float(np.mean(recalls) if recalls else 0.0),
         "det_mean_iou": float(np.mean(ious) if ious else 0.0),
         "det_fps": count / max(elapsed, 1e-6),
-        "det_latency_ms": 1000.0 * float(np.mean(batch_latencies) if batch_latencies else 0.0),
+        "det_latency_ms": 1000.0 * float(np.mean(latencies) if latencies else 0.0),
         "det_peak_memory_mb": peak_memory_mb(device),
     }
 
@@ -134,7 +135,7 @@ def evaluate_pose_model(model: TopDownPoseCNN, cfg: ExperimentConfig) -> dict[st
 
 
 def evaluate_joint_pipeline(detector: TinyPersonDetector, pose_model: TopDownPoseCNN, cfg: ExperimentConfig) -> dict[str, float]:
-    detector_device = next(detector.parameters()).device
+    detector_dev = detector_device(detector)
     pose_device = next(pose_model.parameters()).device
     dataset_cfg = cfg.dataset
     if dataset_cfg.val_annotation_file and Path(dataset_cfg.val_annotation_file).exists():
@@ -146,24 +147,25 @@ def evaluate_joint_pipeline(detector: TinyPersonDetector, pose_model: TopDownPos
     pckh50 = []
     pckh30 = []
     latencies = []
-    reset_peak_memory(detector_device)
-    if pose_device != detector_device:
+    eval_cfg = type("EvalCfg", (), {})()
+    eval_cfg.dataset = dataset_cfg
+    eval_cfg.detector = cfg.detector
+    reset_peak_memory(detector_dev)
+    if pose_device != detector_dev:
         reset_peak_memory(pose_device)
     start = time.perf_counter()
     with torch.no_grad():
         for record in records:
             sample_start = time.perf_counter()
             image = load_image(record.image_path, grayscale=dataset_cfg.grayscale)
-            det_input, scale_x, scale_y = resize_and_normalize(image, cfg.detector.image_size, dataset_cfg.grayscale)
-            det_tensor = torch.from_numpy(det_input.transpose(2, 0, 1)).unsqueeze(0).to(detector_device)
-            pred = decode_detections(detector(det_tensor), cfg.detector.stride, cfg.detector.score_threshold, cfg.detector.nms_iou_threshold, cfg.detector.max_detections)[0]
+            pred = predict_detector_image(detector, eval_cfg, image)
             if pred.boxes.numel() == 0:
                 pck.append(0.0)
                 continue
-            gt_box = torch.tensor([[record.bbox[0] * scale_x, record.bbox[1] * scale_y, (record.bbox[0] + record.bbox[2]) * scale_x, (record.bbox[1] + record.bbox[3]) * scale_y]], device=detector_device)
+            gt_box = torch.tensor([[record.bbox[0], record.bbox[1], record.bbox[0] + record.bbox[2], record.bbox[1] + record.bbox[3]]], device=pred.boxes.device if pred.boxes.numel() else detector_dev)
             best_idx = box_iou_xyxy(pred.boxes, gt_box).squeeze(1).argmax()
             box = pred.boxes[best_idx].detach().cpu().numpy()
-            x1, y1, x2, y2 = [int(v) for v in [box[0] / scale_x, box[1] / scale_y, box[2] / scale_x, box[3] / scale_y]]
+            x1, y1, x2, y2 = [int(v) for v in box]
             x1 = max(x1, 0)
             y1 = max(y1, 0)
             x2 = min(max(x2, x1 + 1), image.shape[1])
@@ -201,7 +203,7 @@ def evaluate_joint_pipeline(detector: TinyPersonDetector, pose_model: TopDownPos
         "joint_pckh30": float(np.mean(pckh30) if pckh30 else 0.0),
         "joint_fps": count / max(elapsed, 1e-6),
         "joint_latency_ms": 1000.0 * float(np.mean(latencies) if latencies else 0.0),
-        "joint_peak_memory_mb": max(peak_memory_mb(detector_device), peak_memory_mb(pose_device)),
+        "joint_peak_memory_mb": max(peak_memory_mb(detector_dev), peak_memory_mb(pose_device)),
     }
 
 

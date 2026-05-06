@@ -15,10 +15,10 @@ from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
 from lite_therm_pose import load_config
-from lite_therm_pose.checkpoints import load_flexible_state_dict
+from lite_therm_pose.detector_backend import build_detector_runtime, detector_device, predict_detector_image
 from lite_therm_pose.data.otp2_test import OTP2TestImage, OTP2TestPerson, load_otp2_test_images
 from lite_therm_pose.inference import RuntimeBundle, run_topdown_inference
-from lite_therm_pose.models.detector import DetectorPrediction, TinyPersonDetector, decode_detections
+from lite_therm_pose.models.detector import DetectorPrediction
 from lite_therm_pose.models.pose_direct import create_pose_model, decode_pose_outputs
 from lite_therm_pose.models.pose_topdown import PosePrediction
 from lite_therm_pose.profile import checkpoint_size_mb, parameter_stats, peak_memory_mb, reset_peak_memory
@@ -109,14 +109,15 @@ def build_bundle(config_path: str, run: BenchmarkRun, detector_device_name: str,
     detector_device = resolve_model_device(cfg.runtime.detector_device, cfg.runtime.device, "detector")
     pose_device = resolve_model_device(cfg.runtime.pose_device, cfg.runtime.device, "pose")
     in_channels = 1 if cfg.dataset.grayscale else 3
-    detector = TinyPersonDetector(in_channels=in_channels, model_name=detector_model_name).to(detector_device).eval()
+    cfg.model.detector_name = detector_model_name
+    detector, _ = build_detector_runtime(cfg, run.detector_ckpt, explicit_device=detector_device_name)
     pose_model = create_pose_model(
         num_keypoints=cfg.dataset.num_keypoints,
         num_parts=len(cfg.dataset.body_parts),
         in_channels=in_channels,
         model_name=pose_model_name,
     ).to(pose_device).eval()
-    load_flexible_state_dict(detector, str(run.detector_ckpt))
+    from lite_therm_pose.checkpoints import load_flexible_state_dict
     load_flexible_state_dict(pose_model, str(run.pose_ckpt))
     return RuntimeBundle(
         detector=detector,
@@ -303,21 +304,10 @@ def compute_mean_oks(test_images: list[OTP2TestImage], joint_pose_predictions: d
 
 @torch.no_grad()
 def predict_detector(bundle: RuntimeBundle, image: np.ndarray) -> DetectorPrediction:
-    detector_input, scale_x, scale_y = resize_and_normalize(image, bundle.detector_cfg.image_size, bundle.dataset_cfg.grayscale)
-    det_tensor = torch.from_numpy(detector_input.transpose(2, 0, 1)).unsqueeze(0).to(bundle.detector_device)
-    pred = decode_detections(
-        bundle.detector(det_tensor),
-        stride=bundle.detector_cfg.stride,
-        score_threshold=bundle.detector_cfg.score_threshold,
-        nms_iou_threshold=bundle.detector_cfg.nms_iou_threshold,
-        max_detections=bundle.detector_cfg.max_detections,
-    )[0]
-    if pred.boxes.numel() == 0:
-        return DetectorPrediction(boxes=pred.boxes.cpu(), scores=pred.scores.cpu())
-    boxes = pred.boxes.detach().cpu().clone()
-    boxes[:, [0, 2]] /= max(scale_x, 1.0e-6)
-    boxes[:, [1, 3]] /= max(scale_y, 1.0e-6)
-    return DetectorPrediction(boxes=boxes, scores=pred.scores.detach().cpu())
+    cfg = type("BenchCfg", (), {})()
+    cfg.dataset = bundle.dataset_cfg
+    cfg.detector = bundle.detector_cfg
+    return predict_detector_image(bundle.detector, cfg, image)
 
 
 @torch.no_grad()

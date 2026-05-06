@@ -8,14 +8,14 @@ import torch
 
 from .checkpoints import load_flexible_state_dict
 from .config import DatasetConfig, DetectorConfig
-from .models.detector import TinyPersonDetector, decode_detections
+from .detector_backend import predict_detector_image
 from .models.pose_direct import decode_pose_outputs
 from .utils import draw_pose, resize_and_normalize
 
 
 @dataclass
 class RuntimeBundle:
-    detector: TinyPersonDetector
+    detector: object
     pose_model: torch.nn.Module
     detector_device: torch.device
     pose_device: torch.device
@@ -30,16 +30,12 @@ def load_weights(model: torch.nn.Module, checkpoint_path: str) -> None:
 
 @torch.no_grad()
 def run_topdown_inference(bundle: RuntimeBundle, frame: np.ndarray) -> np.ndarray:
-    detector_input, scale_x, scale_y = resize_and_normalize(frame, bundle.detector_cfg.image_size, bundle.dataset_cfg.grayscale)
-    det_tensor = torch.from_numpy(detector_input.transpose(2, 0, 1)).unsqueeze(0).to(bundle.detector_device)
-    det_preds = bundle.detector(det_tensor)
-    dets = decode_detections(
-        det_preds,
-        stride=bundle.detector_cfg.stride,
-        score_threshold=bundle.detector_cfg.score_threshold,
-        nms_iou_threshold=bundle.detector_cfg.nms_iou_threshold,
-        max_detections=bundle.detector_cfg.max_detections,
-    )[0]
+    class _Cfg:
+        pass
+    cfg = _Cfg()
+    cfg.dataset = bundle.dataset_cfg
+    cfg.detector = bundle.detector_cfg
+    dets = predict_detector_image(bundle.detector, cfg, frame)
     visual = frame.copy()
     if visual.ndim == 3 and visual.shape[2] == 1:
         visual = cv2.cvtColor(visual, cv2.COLOR_GRAY2BGR)

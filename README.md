@@ -693,5 +693,31 @@ python run_uch_direct_from_otp.py \
   --output outputs/uch_pose_direct_from_otp
 ```
 
+## YOLOv5n detector + 改良 direct モデル
+`pose_resnet50_se_direct` を土台に、最後段で座標 residual を詰める `pose_resnet50_se_direct_refine` を追加しています。人物検出器は custom detector の代わりに `YOLOv5n` を使えます。学習にはローカルの YOLOv5 リポジトリが必要です。
+
+- `configs/coco_pretrain_pose_direct_yolov5n.yaml`
+- `configs/openthermalpose2_finetune_pose_direct_yolov5n.yaml`
+- `run_pose_direct_yolov5n_pipeline.py`
+
+```bash
+python run_pose_direct_yolov5n_pipeline.py \
+  --pretrain-config configs/coco_pretrain_pose_direct_yolov5n.yaml \
+  --finetune-config configs/openthermalpose2_finetune_pose_direct_yolov5n.yaml \
+  --train-output outputs/pose_direct_yolov5n \
+  --benchmark-output outputs/otp2_test_benchmark_pose_direct_yolov5n \
+  --yolov5-repo /home/motomochi/yolov5 \
+  --yolov5-weights yolov5n.pt \
+  --test-images-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/images \
+  --test-labels-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/labels
+```
+
+この runner は次をまとめて行います。
+
+1. COCO で `YOLOv5n detector` を pretrain
+2. COCO で `pose_resnet50_se_direct_refine` を pretrain
+3. OpenThermalPose2 で detector / pose を fine-tune
+4. OTP2 test で benchmark
+
 この流れでは、`Set-A train` で fine-tune し、`Set-B test` を `val_annotation_file` として評価します。
 `summary.csv` には `pose_pckh50` と `joint_pckh50` も含まれます。

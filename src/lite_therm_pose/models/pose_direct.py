@@ -49,8 +49,9 @@ class DirectPoseRegressor(nn.Module):
         super().__init__()
         self.is_direct_regression = True
         self.num_keypoints = num_keypoints
+        self.use_refine = "direct_refine" in model_name
         self.backbone = build_backbone(model_name, in_channels=in_channels)
-        hidden = max(self.backbone.out_channels // 2, 256)
+        hidden = max(self.backbone.out_channels // 2, 256) + (32 if self.use_refine else 0)
         low_hidden = max(self.backbone.low_level_channels, 64)
         fused_dim = self.backbone.out_channels + low_hidden
 
@@ -83,6 +84,18 @@ class DirectPoseRegressor(nn.Module):
             nn.Dropout(0.15),
             nn.Linear(hidden // 2, num_keypoints),
         )
+        if self.use_refine:
+            self.refine_head = nn.Sequential(
+                nn.Linear(hidden, hidden // 2),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(hidden // 2, num_keypoints * 2),
+            )
+            self.refine_gate = nn.Sequential(
+                nn.Linear(hidden, num_keypoints),
+                nn.Sigmoid(),
+            )
+            _init_linear(self.refine_head)
         _init_linear(self.trunk)
         _init_linear(self.xy_head)
         _init_linear(self.visibility_head)
@@ -96,6 +109,10 @@ class DirectPoseRegressor(nn.Module):
         fused = self.pre_norm(torch.cat([pooled_high, pooled_low], dim=1))
         feat = self.trunk(fused)
         keypoint_xy = torch.sigmoid(self.xy_head(feat)).view(batch_size, self.num_keypoints, 2)
+        if self.use_refine:
+            residual = torch.tanh(self.refine_head(feat)).view(batch_size, self.num_keypoints, 2) * 0.08
+            gate = self.refine_gate(feat).view(batch_size, self.num_keypoints, 1)
+            keypoint_xy = (keypoint_xy + residual * gate).clamp(0.0, 1.0)
         visibility = self.visibility_head(feat)
         return {
             "keypoint_xy": keypoint_xy,

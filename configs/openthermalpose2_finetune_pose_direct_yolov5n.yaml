@@ -1,0 +1,35 @@
+dataset:
+  image_root: data/openthermalpose2/images
+  annotation_file: data/openthermalpose2/annotations/train.json
+  val_image_root: data/openthermalpose2/images
+  val_annotation_file: data/openthermalpose2/annotations/val.json
+  image_size: [256, 192]
+  heatmap_size: [64, 48]
+  num_keypoints: 17
+  grayscale: true
+  body_parts: [head, torso, left_arm, right_arm, left_leg, right_leg]
+model:
+  name: pose_resnet50_se_direct_refine
+optim:
+  batch_size: 8
+  epochs: 34
+  lr: 0.00035
+  weight_decay: 0.0001
+  workers: 4
+augmentation:
+  flip_prob: 0.5
+  scale_jitter: 0.14
+  rotate_deg: 8.0
+  partial_crop_prob: 0.16
+  intensity_jitter: 0.06
+detector:
+  backend: yolov5n
+  image_size: [320, 320]
+  score_threshold: 0.2
+  yolov5_repo: ""
+  yolov5_weights: yolov5n.pt
+  yolov5_imgsz: 320
+runtime:
+  device: auto
+  detector_device: cuda:0
+  pose_device: cuda:1

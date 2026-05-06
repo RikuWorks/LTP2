@@ -7,6 +7,7 @@ import torch
 from .checkpoints import load_flexible_state_dict
 from .config import ExperimentConfig
 from .data import DetectorDataset, PoseDataset
+from .detector_backend import build_detector_runtime, train_yolov5_detector, uses_yolov5_backend
 from .engine import make_loader, train_loop
 from .models.detector import TinyPersonDetector, detector_loss
 from .models.pose_direct import create_pose_model, pose_objective
@@ -35,6 +36,10 @@ def build_pose_model(cfg: ExperimentConfig) -> tuple[TopDownPoseCNN, torch.devic
 
 
 def train_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> tuple[TinyPersonDetector, dict[str, float | list[float]]]:
+    if uses_yolov5_backend(cfg):
+        stats = train_yolov5_detector(cfg, output_dir, weights=weights)
+        detector = load_trained_detector(cfg, Path(output_dir) / "detector_last.pt")
+        return detector, stats
     model, device = build_detector(cfg)
     dataset = DetectorDataset(cfg.dataset, cfg.detector, cfg.augmentation)
     loader = make_loader(dataset, batch_size=cfg.optim.batch_size, workers=cfg.optim.workers, device=device)
@@ -85,6 +90,9 @@ def train_pose(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "")
 
 
 def load_trained_detector(cfg: ExperimentConfig, checkpoint_path: str | Path) -> TinyPersonDetector:
+    if uses_yolov5_backend(cfg):
+        detector, _ = build_detector_runtime(cfg, checkpoint_path)
+        return detector
     model, _ = build_detector(cfg)
     load_flexible_state_dict(model, str(checkpoint_path))
     return model

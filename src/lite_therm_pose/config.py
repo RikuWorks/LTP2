@@ -48,11 +48,15 @@ class OptimConfig:
 
 @dataclass
 class DetectorConfig:
+    backend: str = "tiny"
     image_size: tuple[int, int] = (320, 320)
     stride: int = 8
     max_detections: int = 16
     score_threshold: float = 0.25
     nms_iou_threshold: float = 0.45
+    yolov5_repo: str = ""
+    yolov5_weights: str = "yolov5n.pt"
+    yolov5_imgsz: int = 320
 
 
 @dataclass
