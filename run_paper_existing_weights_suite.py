@@ -119,6 +119,35 @@ def discover_existing_runs(source_root: Path, allow: set[str]) -> list[ExistingR
     return runs
 
 
+def resolve_source_roots(source_root: Path) -> list[Path]:
+    roots: list[Path] = []
+
+    def add_root(path: Path) -> None:
+        resolved = path.resolve()
+        if resolved.exists() and resolved.is_dir() and resolved not in roots:
+            roots.append(resolved)
+
+    add_root(source_root)
+    if source_root.as_posix().endswith("paper/outputs"):
+        add_root(source_root.parent.parent / "outputs")
+    if source_root.name == "outputs":
+        add_root(source_root.parent / "paper" / "outputs")
+    return roots
+
+
+def discover_existing_runs_multi(source_roots: list[Path], allow: set[str]) -> tuple[list[ExistingRun], list[str]]:
+    merged: dict[tuple[str, str, str], ExistingRun] = {}
+    searched: list[str] = []
+    for root in source_roots:
+        searched.append(str(root))
+        for run in discover_existing_runs(root, allow):
+            key = (run.run_id, run.suite_name, run.model_name)
+            merged.setdefault(key, run)
+    runs = list(merged.values())
+    runs.sort(key=lambda item: (item.model_name, item.suite_name, item.run_id))
+    return runs, searched
+
+
 def build_bundle_from_run(args: argparse.Namespace, run: ExistingRun, detector_device_name: str, pose_device_name: str, draw_parts: bool = False):
     cfg = load_config(_config_template(args, run))
     cfg.model.name = run.model_name
@@ -170,14 +199,28 @@ def write_manifest(runs: list[ExistingRun], output_dir: Path) -> None:
             writer.writerows(rows)
 
 
+def write_failures(rows: list[dict[str, Any]], output_dir: Path) -> None:
+    if not rows:
+        return
+    with (output_dir / "failed_runs.json").open("w", encoding="utf-8") as handle:
+        json.dump(rows, handle, ensure_ascii=False, indent=2)
+    with (output_dir / "failed_runs.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def main() -> None:
     args = parse_args()
     output_dir = ensure_dir(args.output)
     allow = _allowed_models(args.models)
-    runs = discover_existing_runs(Path(args.source_root), allow)
+    source_roots = resolve_source_roots(Path(args.source_root))
+    runs, searched_roots = discover_existing_runs_multi(source_roots, allow)
     if not runs:
-        raise FileNotFoundError("No existing finetune checkpoint pairs were found under the source root.")
+        searched_label = ", ".join(searched_roots) if searched_roots else str(Path(args.source_root).resolve())
+        raise FileNotFoundError(f"No existing finetune checkpoint pairs were found under: {searched_label}")
     write_manifest(runs, output_dir)
+    (output_dir / "searched_roots.json").write_text(json.dumps(searched_roots, ensure_ascii=False, indent=2), encoding="utf-8")
 
     test_images = otp2_bench.load_otp2_test_images(
         images_dir=args.test_images_dir or None,
@@ -186,87 +229,109 @@ def main() -> None:
     )
     coco_gt = otp2_bench.build_coco_gt(test_images)
     rows: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
     gpu_available = torch.cuda.is_available()
     visual_device = args.gpu_device if gpu_available else args.cpu_device
-    visual_bundle = build_bundle_from_run(args, runs[0], visual_device, visual_device, draw_parts=False)
+    visual_bundle = None
+    successful_runs: list[ExistingRun] = []
 
     for run in runs:
-        eval_device = args.gpu_device if gpu_available else args.cpu_device
-        eval_bundle = build_bundle_from_run(args, run, eval_device, eval_device, draw_parts=False)
-        detector_stats = otp2_bench.evaluate_detector(eval_bundle, test_images)
-        pose_stats = otp2_bench.evaluate_pose_gt(eval_bundle, test_images)
-        joint_stats = otp2_bench.evaluate_joint(eval_bundle, test_images)
-        bbox_results, keypoint_results, joint_pose_predictions = otp2_bench.collect_coco_predictions(eval_bundle, test_images)
-        _, det_coco_stats = otp2_bench._run_cocoeval(coco_gt, bbox_results, "bbox")
-        _, pose_coco_stats = otp2_bench._run_cocoeval(coco_gt, keypoint_results, "keypoints")
-        pose_mean_oks = otp2_bench.compute_mean_oks(test_images, joint_pose_predictions)
+        try:
+            eval_device = args.gpu_device if gpu_available else args.cpu_device
+            eval_bundle = build_bundle_from_run(args, run, eval_device, eval_device, draw_parts=False)
+            detector_stats = otp2_bench.evaluate_detector(eval_bundle, test_images)
+            pose_stats = otp2_bench.evaluate_pose_gt(eval_bundle, test_images)
+            joint_stats = otp2_bench.evaluate_joint(eval_bundle, test_images)
+            bbox_results, keypoint_results, joint_pose_predictions = otp2_bench.collect_coco_predictions(eval_bundle, test_images)
+            _, det_coco_stats = otp2_bench._run_cocoeval(coco_gt, bbox_results, "bbox")
+            _, pose_coco_stats = otp2_bench._run_cocoeval(coco_gt, keypoint_results, "keypoints")
+            pose_mean_oks = otp2_bench.compute_mean_oks(test_images, joint_pose_predictions)
 
-        cpu_speed: dict[str, float] = {}
-        if not args.gpu_only:
-            cpu_bundle = build_bundle_from_run(args, run, args.cpu_device, args.cpu_device, draw_parts=False)
-            cpu_speed = otp2_bench.benchmark_runtime(cpu_bundle, test_images, warmup=args.warmup)
-        gpu_speed: dict[str, float] = {}
-        if gpu_available:
-            gpu_bundle = build_bundle_from_run(args, run, args.gpu_device, args.gpu_device, draw_parts=False)
-            gpu_speed = otp2_bench.benchmark_runtime(gpu_bundle, test_images, warmup=args.warmup)
+            cpu_speed: dict[str, float] = {}
+            if not args.gpu_only:
+                cpu_bundle = build_bundle_from_run(args, run, args.cpu_device, args.cpu_device, draw_parts=False)
+                cpu_speed = otp2_bench.benchmark_runtime(cpu_bundle, test_images, warmup=args.warmup)
+            gpu_speed: dict[str, float] = {}
+            if gpu_available:
+                gpu_bundle = build_bundle_from_run(args, run, args.gpu_device, args.gpu_device, draw_parts=False)
+                gpu_speed = otp2_bench.benchmark_runtime(gpu_bundle, test_images, warmup=args.warmup)
 
-        detector_profile = parameter_stats(eval_bundle.detector, "detector")
-        pose_profile = parameter_stats(eval_bundle.pose_model, "pose")
-        row = {
-            "run_id": run.run_id,
-            "suite_name": run.suite_name,
-            "model_name": run.model_name,
-            "backend": run.backend,
-            **detector_profile,
-            **pose_profile,
-            "total_params_m": detector_profile["detector_params_m"] + pose_profile["pose_params_m"],
-            "detector_checkpoint_mb": checkpoint_size_mb(run.detector_ckpt),
-            "pose_checkpoint_mb": checkpoint_size_mb(run.pose_ckpt),
-            **detector_stats,
-            **pose_stats,
-            **joint_stats,
-            **det_coco_stats,
-            **pose_coco_stats,
-            "pose_mean_oks_test": pose_mean_oks,
-            "cpu_det_fps_images": cpu_speed.get("det_fps_images", 0.0),
-            "cpu_det_latency_ms_test": cpu_speed.get("det_latency_ms_test", 0.0),
-            "cpu_pose_fps_images": cpu_speed.get("pose_fps_images", 0.0),
-            "cpu_pose_fps_persons": cpu_speed.get("pose_fps_persons", 0.0),
-            "cpu_pose_latency_ms_test": cpu_speed.get("pose_latency_ms_test", 0.0),
-            "cpu_joint_fps_images": cpu_speed.get("joint_fps_images", 0.0),
-            "cpu_joint_latency_ms_test": cpu_speed.get("joint_latency_ms_test", 0.0),
-            "gpu_det_fps_images": gpu_speed.get("det_fps_images", 0.0),
-            "gpu_det_latency_ms_test": gpu_speed.get("det_latency_ms_test", 0.0),
-            "gpu_det_peak_memory_mb_test": gpu_speed.get("det_peak_memory_mb_test", 0.0),
-            "gpu_pose_fps_images": gpu_speed.get("pose_fps_images", 0.0),
-            "gpu_pose_fps_persons": gpu_speed.get("pose_fps_persons", 0.0),
-            "gpu_pose_latency_ms_test": gpu_speed.get("pose_latency_ms_test", 0.0),
-            "gpu_pose_peak_memory_mb_test": gpu_speed.get("pose_peak_memory_mb_test", 0.0),
-            "gpu_joint_fps_images": gpu_speed.get("joint_fps_images", 0.0),
-            "gpu_joint_latency_ms_test": gpu_speed.get("joint_latency_ms_test", 0.0),
-            "gpu_joint_peak_memory_mb_test": gpu_speed.get("joint_peak_memory_mb_test", 0.0),
-            "test_images_count": len(test_images),
-            "test_persons_count": sum(len(item.persons) for item in test_images),
-            "source_dir": str(run.source_dir),
-        }
-        rows.append(row)
-        model_dir = ensure_dir(output_dir / run.run_id)
-        with (model_dir / "metrics.json").open("w", encoding="utf-8") as handle:
-            json.dump(row, handle, ensure_ascii=False, indent=2)
+            detector_profile = parameter_stats(eval_bundle.detector, "detector")
+            pose_profile = parameter_stats(eval_bundle.pose_model, "pose")
+            row = {
+                "run_id": run.run_id,
+                "suite_name": run.suite_name,
+                "model_name": run.model_name,
+                "backend": run.backend,
+                **detector_profile,
+                **pose_profile,
+                "total_params_m": detector_profile["detector_params_m"] + pose_profile["pose_params_m"],
+                "detector_checkpoint_mb": checkpoint_size_mb(run.detector_ckpt),
+                "pose_checkpoint_mb": checkpoint_size_mb(run.pose_ckpt),
+                **detector_stats,
+                **pose_stats,
+                **joint_stats,
+                **det_coco_stats,
+                **pose_coco_stats,
+                "pose_mean_oks_test": pose_mean_oks,
+                "cpu_det_fps_images": cpu_speed.get("det_fps_images", 0.0),
+                "cpu_det_latency_ms_test": cpu_speed.get("det_latency_ms_test", 0.0),
+                "cpu_pose_fps_images": cpu_speed.get("pose_fps_images", 0.0),
+                "cpu_pose_fps_persons": cpu_speed.get("pose_fps_persons", 0.0),
+                "cpu_pose_latency_ms_test": cpu_speed.get("pose_latency_ms_test", 0.0),
+                "cpu_joint_fps_images": cpu_speed.get("joint_fps_images", 0.0),
+                "cpu_joint_latency_ms_test": cpu_speed.get("joint_latency_ms_test", 0.0),
+                "gpu_det_fps_images": gpu_speed.get("det_fps_images", 0.0),
+                "gpu_det_latency_ms_test": gpu_speed.get("det_latency_ms_test", 0.0),
+                "gpu_det_peak_memory_mb_test": gpu_speed.get("det_peak_memory_mb_test", 0.0),
+                "gpu_pose_fps_images": gpu_speed.get("pose_fps_images", 0.0),
+                "gpu_pose_fps_persons": gpu_speed.get("pose_fps_persons", 0.0),
+                "gpu_pose_latency_ms_test": gpu_speed.get("pose_latency_ms_test", 0.0),
+                "gpu_pose_peak_memory_mb_test": gpu_speed.get("pose_peak_memory_mb_test", 0.0),
+                "gpu_joint_fps_images": gpu_speed.get("joint_fps_images", 0.0),
+                "gpu_joint_latency_ms_test": gpu_speed.get("joint_latency_ms_test", 0.0),
+                "gpu_joint_peak_memory_mb_test": gpu_speed.get("joint_peak_memory_mb_test", 0.0),
+                "test_images_count": len(test_images),
+                "test_persons_count": sum(len(item.persons) for item in test_images),
+                "source_dir": str(run.source_dir),
+            }
+            rows.append(row)
+            successful_runs.append(run)
+            if visual_bundle is None:
+                visual_bundle = build_bundle_from_run(args, run, visual_device, visual_device, draw_parts=False)
+            model_dir = ensure_dir(output_dir / run.run_id)
+            with (model_dir / "metrics.json").open("w", encoding="utf-8") as handle:
+                json.dump(row, handle, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            failures.append(
+                {
+                    "run_id": run.run_id,
+                    "suite_name": run.suite_name,
+                    "model_name": run.model_name,
+                    "backend": run.backend,
+                    "source_dir": str(run.source_dir),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
 
+    write_failures(failures, output_dir)
+    if not rows:
+        raise RuntimeError("No runs completed successfully. See failed_runs.csv for details.")
     rows.sort(key=lambda row: float(row["joint_score_test"]), reverse=True)
     otp2_bench.write_rows(rows, output_dir)
     otp2_bench.plot_charts(rows, output_dir)
-    otp2_bench.save_qualitative_examples(output_dir, _config_template(args, runs[0]), visual_bundle, [
-        otp2_bench.BenchmarkRun(
-            run_id=run.run_id,
-            model_name=run.model_name,
-            suite_name=run.suite_name,
-            detector_ckpt=run.detector_ckpt,
-            pose_ckpt=run.pose_ckpt,
-        )
-        for run in runs
-    ], test_images, num_samples=args.visual_samples)
+    if visual_bundle is not None and successful_runs:
+        otp2_bench.save_qualitative_examples(output_dir, _config_template(args, successful_runs[0]), visual_bundle, [
+            otp2_bench.BenchmarkRun(
+                run_id=run.run_id,
+                model_name=run.model_name,
+                suite_name=run.suite_name,
+                detector_ckpt=run.detector_ckpt,
+                pose_ckpt=run.pose_ckpt,
+            )
+            for run in successful_runs
+        ], test_images, num_samples=args.visual_samples)
 
 
 if __name__ == "__main__":
