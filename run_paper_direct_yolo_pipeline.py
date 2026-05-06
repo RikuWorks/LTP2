@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lwir-output", type=str, default="outputs/lwirpose_pose_direct_yolov5n_suite")
     parser.add_argument("--uch-output", type=str, default="outputs/uch_pose_direct_yolov5n_suite")
     parser.add_argument("--summary-output", type=str, default="outputs/paper_direct_yolo_comparison")
+    parser.add_argument("--pose-pretrain-source", type=str, action="append", default=["outputs/pose_direct_suite", "outputs/pose_direct"], help="Existing suite directories containing COCO pose pretrain checkpoints.")
     parser.add_argument("--yolov5-repo", type=str, default="")
     parser.add_argument("--yolov5-weights", type=str, default="yolov5n.pt")
     parser.add_argument("--test-images-dir", type=str, default="")
@@ -135,6 +136,9 @@ def main() -> None:
                 args.otp2_train_output,
                 "--benchmark-output",
                 args.otp2_benchmark_output,
+            ]
+            + sum([["--pose-pretrain-source", item] for item in args.pose_pretrain_source], [])
+            + [
                 "--yolov5-repo",
                 args.yolov5_repo,
                 "--yolov5-weights",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ import yaml
 import benchmark_otp2_testset as otp2_bench
 from lite_therm_pose import load_config
 from lite_therm_pose.evaluate import evaluate_detector_model, evaluate_joint_pipeline, evaluate_pose_model, write_summary_report
+from lite_therm_pose.paper_models import pretrain_source_candidates
 from lite_therm_pose.profile import checkpoint_size_mb, parameter_stats
 from lite_therm_pose.runtime import resolve_model_device
 from lite_therm_pose.trainers import load_trained_detector, load_trained_pose
@@ -25,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--finetune-config", type=str, default="configs/openthermalpose2_finetune_pose_direct_yolov5n.yaml")
     parser.add_argument("--train-output", type=str, default="outputs/pose_direct_yolov5n")
     parser.add_argument("--benchmark-output", type=str, default="outputs/otp2_test_benchmark_pose_direct_yolov5n")
+    parser.add_argument("--pose-pretrain-source", type=str, action="append", default=[], help="Existing suite directory containing pretrain_pose/pose_last.pt to reuse.")
     parser.add_argument("--yolov5-repo", type=str, default="")
     parser.add_argument("--yolov5-weights", type=str, default="yolov5n.pt")
     parser.add_argument("--test-images-dir", type=str, default="")
@@ -156,6 +159,19 @@ def _read_training_stats(output_dir: Path, checkpoint_name: str) -> dict[str, fl
     }
 
 
+def _resolve_pose_pretrain_checkpoint(source_roots: list[str], model_name: str) -> tuple[Path, dict[str, float | list[float]]] | None:
+    if not source_roots:
+        return None
+    for source_root in source_roots:
+        root = Path(source_root)
+        for candidate in pretrain_source_candidates(model_name):
+            pretrain_dir = root / candidate / "pretrain_pose"
+            checkpoint_path = pretrain_dir / "pose_last.pt"
+            if checkpoint_path.exists():
+                return checkpoint_path, _read_training_stats(pretrain_dir, "pose_last.pt")
+    return None
+
+
 def run_training(args: argparse.Namespace) -> Path:
     model_name = args.model
     pretrain_cfg = prepare_cfg(args.pretrain_config, args, model_name)
@@ -168,37 +184,75 @@ def run_training(args: argparse.Namespace) -> Path:
     pose_pre_dir = root / "pretrain_pose"
     det_fine_dir = root / "finetune_detector"
     pose_fine_dir = root / "finetune_pose"
+    reused_pretrain = _resolve_pose_pretrain_checkpoint(args.pose_pretrain_source, model_name)
+    pose_pre_stats = {
+        "loss_history": [],
+        "train_seconds_total": 0.0,
+        "epoch_seconds_mean": 0.0,
+        "train_peak_memory_mb": 0.0,
+        "completed_epochs": 0,
+    }
+    pose_pre_checkpoint = pose_pre_dir / "pose_last.pt"
 
-    if _supports_parallel(pretrain_cfg, finetune_cfg):
-        pose_pre_proc = subprocess.Popen(
-            _pose_train_command(model_name, effective_pretrain_cfg, pose_pre_dir),
-            cwd=_repo_root(),
-            env=_subprocess_env(),
-        )
-        det_fine_proc = subprocess.Popen(
-            _detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights),
-            cwd=_repo_root(),
-            env=_subprocess_env(),
-        )
-        pose_pre_code = pose_pre_proc.wait()
-        det_fine_code = det_fine_proc.wait()
-        if pose_pre_code != 0:
-            raise RuntimeError(f"pose_pre failed with exit code {pose_pre_code}")
-        if det_fine_code != 0:
-            raise RuntimeError(f"det_fine failed with exit code {det_fine_code}")
-        _run_command(
-            _pose_train_command(model_name, effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
-            "pose_fine",
-        )
+    if reused_pretrain is not None:
+        source_ckpt, source_stats = reused_pretrain
+        ensure_dir(pose_pre_dir)
+        shutil.copy2(source_ckpt, pose_pre_checkpoint)
+        pose_pre_stats = source_stats
+        if _supports_parallel(pretrain_cfg, finetune_cfg):
+            det_fine_proc = subprocess.Popen(
+                _detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights),
+                cwd=_repo_root(),
+                env=_subprocess_env(),
+            )
+            pose_fine_proc = subprocess.Popen(
+                _pose_train_command(model_name, effective_finetune_cfg, pose_fine_dir, str(pose_pre_checkpoint)),
+                cwd=_repo_root(),
+                env=_subprocess_env(),
+            )
+            det_fine_code = det_fine_proc.wait()
+            pose_fine_code = pose_fine_proc.wait()
+            if det_fine_code != 0:
+                raise RuntimeError(f"det_fine failed with exit code {det_fine_code}")
+            if pose_fine_code != 0:
+                raise RuntimeError(f"pose_fine failed with exit code {pose_fine_code}")
+        else:
+            _run_command(_detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights), "det_fine")
+            _run_command(
+                _pose_train_command(model_name, effective_finetune_cfg, pose_fine_dir, str(pose_pre_checkpoint)),
+                "pose_fine",
+            )
     else:
-        _run_command(_pose_train_command(model_name, effective_pretrain_cfg, pose_pre_dir), "pose_pre")
-        _run_command(_detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights), "det_fine")
-        _run_command(
-            _pose_train_command(model_name, effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
-            "pose_fine",
-        )
+        if _supports_parallel(pretrain_cfg, finetune_cfg):
+            pose_pre_proc = subprocess.Popen(
+                _pose_train_command(model_name, effective_pretrain_cfg, pose_pre_dir),
+                cwd=_repo_root(),
+                env=_subprocess_env(),
+            )
+            det_fine_proc = subprocess.Popen(
+                _detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights),
+                cwd=_repo_root(),
+                env=_subprocess_env(),
+            )
+            pose_pre_code = pose_pre_proc.wait()
+            det_fine_code = det_fine_proc.wait()
+            if pose_pre_code != 0:
+                raise RuntimeError(f"pose_pre failed with exit code {pose_pre_code}")
+            if det_fine_code != 0:
+                raise RuntimeError(f"det_fine failed with exit code {det_fine_code}")
+            _run_command(
+                _pose_train_command(model_name, effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
+                "pose_fine",
+            )
+        else:
+            _run_command(_pose_train_command(model_name, effective_pretrain_cfg, pose_pre_dir), "pose_pre")
+            _run_command(_detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights), "det_fine")
+            _run_command(
+                _pose_train_command(model_name, effective_finetune_cfg, pose_fine_dir, str(pose_pre_dir / "pose_last.pt")),
+                "pose_fine",
+            )
+        pose_pre_stats = _read_training_stats(pose_pre_dir, "pose_last.pt")
 
-    pose_pre_stats = _read_training_stats(pose_pre_dir, "pose_last.pt")
     det_fine_stats = _read_training_stats(det_fine_dir, "detector_last.pt")
     pose_fine_stats = _read_training_stats(pose_fine_dir, "pose_last.pt")
 

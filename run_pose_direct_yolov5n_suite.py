@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--finetune-config", type=str, default="configs/openthermalpose2_finetune_pose_direct_yolov5n.yaml")
     parser.add_argument("--train-output", type=str, default="outputs/pose_direct_yolov5n_suite")
     parser.add_argument("--benchmark-output", type=str, default="outputs/otp2_test_benchmark_pose_direct_yolov5n_suite")
+    parser.add_argument("--pose-pretrain-source", type=str, action="append", default=[], help="Existing suite directories containing pretrain_pose checkpoints to reuse.")
     parser.add_argument("--yolov5-repo", type=str, default="")
     parser.add_argument("--yolov5-weights", type=str, default="yolov5n.pt")
     parser.add_argument("--test-images-dir", type=str, default="")
