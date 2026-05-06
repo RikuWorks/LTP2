@@ -38,7 +38,23 @@ def ensure_yolov5_repo(repo_dir: str | Path, repo_url: str = DEFAULT_YOLOV5_REPO
         raise FileNotFoundError(
             f"YOLOv5 repository was not found in '{target}'. Either provide a valid repo path or clear this directory."
         )
-    subprocess.run(["git", "clone", repo_url, str(target)], check=True)
+    git_bin = shutil.which("git")
+    if git_bin is None:
+        raise FileNotFoundError(
+            "git executable was not found while trying to auto-clone YOLOv5. "
+            f"Install git or pass --yolov5-repo with an existing clone. Target: {target}"
+        )
+    try:
+        subprocess.run([git_bin, "clone", repo_url, str(target)], check=True)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Failed to clone YOLOv5 into '{target}'. git executable path: {git_bin}"
+        ) from exc
+    if not train_py.exists() or not hubconf_py.exists():
+        raise FileNotFoundError(
+            f"YOLOv5 clone into '{target}' did not produce train.py/hubconf.py. "
+            "Check network access or provide --yolov5-repo manually."
+        )
     return target
 
 
@@ -252,12 +268,15 @@ def _read_yolov5_loss_history(results_csv: Path) -> list[float]:
 
 def train_yolov5_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> dict[str, float | list[float]]:
     repo_dir = resolve_yolov5_repo_dir(cfg, workspace_hint=output_dir)
+    train_script = repo_dir / "train.py"
+    if not train_script.exists():
+        raise FileNotFoundError(f"YOLOv5 train.py was not found in '{repo_dir}'.")
     dataset_yaml = export_detector_dataset_to_yolov5(cfg, output_dir)
     run_root = ensure_dir(Path(output_dir) / "yolov5_runs")
     train_name = "train"
     cmd = [
         sys.executable,
-        str(Path(repo_dir) / "train.py"),
+        str(train_script),
         "--img",
         str(cfg.detector.yolov5_imgsz),
         "--batch",
@@ -278,7 +297,12 @@ def train_yolov5_detector(cfg: ExperimentConfig, output_dir: str | Path, weights
         _resolve_yolov5_device(cfg),
     ]
     start = time.perf_counter()
-    subprocess.run(cmd, check=True, cwd=repo_dir)
+    try:
+        subprocess.run(cmd, check=True, cwd=repo_dir)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Failed to launch YOLOv5 training. Python executable: {sys.executable}, repo: {repo_dir}, script: {train_script}"
+        ) from exc
     elapsed = time.perf_counter() - start
     weights_dir = run_root / train_name / "weights"
     best_ckpt = weights_dir / "best.pt"
