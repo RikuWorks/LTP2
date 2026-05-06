@@ -20,8 +20,35 @@ from .runtime import resolve_model_device
 from .utils import ensure_dir, resize_and_normalize
 
 
+DEFAULT_YOLOV5_REPO_URL = "https://github.com/ultralytics/yolov5.git"
+
+
 def uses_yolov5_backend(cfg: ExperimentConfig) -> bool:
     return cfg.detector.backend.strip().lower() == "yolov5n"
+
+
+def ensure_yolov5_repo(repo_dir: str | Path, repo_url: str = DEFAULT_YOLOV5_REPO_URL) -> Path:
+    target = Path(repo_dir)
+    train_py = target / "train.py"
+    hubconf_py = target / "hubconf.py"
+    if train_py.exists() and hubconf_py.exists():
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() and any(target.iterdir()):
+        raise FileNotFoundError(
+            f"YOLOv5 repository was not found in '{target}'. Either provide a valid repo path or clear this directory."
+        )
+    subprocess.run(["git", "clone", repo_url, str(target)], check=True)
+    return target
+
+
+def resolve_yolov5_repo_dir(cfg: ExperimentConfig, workspace_hint: str | Path | None = None) -> Path:
+    raw = cfg.detector.yolov5_repo.strip()
+    if raw:
+        return ensure_yolov5_repo(raw)
+    base = Path(workspace_hint) if workspace_hint is not None else Path.cwd()
+    auto_dir = base / "external" / "yolov5"
+    return ensure_yolov5_repo(auto_dir)
 
 
 class YOLOv5DetectorAdapter:
@@ -32,7 +59,7 @@ class YOLOv5DetectorAdapter:
         device: torch.device,
         detector_cfg: Any,
     ) -> None:
-        self.repo_dir = Path(repo_dir)
+        self.repo_dir = ensure_yolov5_repo(repo_dir)
         self.weights_path = Path(weights_path)
         self.device = device
         self.detector_cfg = detector_cfg
@@ -84,9 +111,7 @@ def build_detector_runtime(
 ) -> tuple[Any, torch.device]:
     device = resolve_model_device(explicit_device or cfg.runtime.detector_device, cfg.runtime.device, "detector")
     if uses_yolov5_backend(cfg):
-        repo_dir = cfg.detector.yolov5_repo.strip()
-        if not repo_dir:
-            raise ValueError("detector.yolov5_repo must be set when detector.backend is 'yolov5n'.")
+        repo_dir = resolve_yolov5_repo_dir(cfg, workspace_hint=Path(checkpoint_path).parent.parent)
         detector = YOLOv5DetectorAdapter(
             repo_dir=repo_dir,
             weights_path=checkpoint_path,
@@ -226,9 +251,7 @@ def _read_yolov5_loss_history(results_csv: Path) -> list[float]:
 
 
 def train_yolov5_detector(cfg: ExperimentConfig, output_dir: str | Path, weights: str = "") -> dict[str, float | list[float]]:
-    repo_dir = cfg.detector.yolov5_repo.strip()
-    if not repo_dir:
-        raise ValueError("detector.yolov5_repo must be set when detector.backend is 'yolov5n'.")
+    repo_dir = resolve_yolov5_repo_dir(cfg, workspace_hint=output_dir)
     dataset_yaml = export_detector_dataset_to_yolov5(cfg, output_dir)
     run_root = ensure_dir(Path(output_dir) / "yolov5_runs")
     train_name = "train"

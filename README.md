@@ -706,7 +706,6 @@ python run_pose_direct_yolov5n_pipeline.py \
   --finetune-config configs/openthermalpose2_finetune_pose_direct_yolov5n.yaml \
   --train-output outputs/pose_direct_yolov5n \
   --benchmark-output outputs/otp2_test_benchmark_pose_direct_yolov5n \
-  --yolov5-repo /home/motomochi/yolov5 \
   --yolov5-weights yolov5n.pt \
   --test-images-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/images \
   --test-labels-dir data/raw/openthermalpose2_extracted/otp2_dataset/test/labels
@@ -718,6 +717,8 @@ python run_pose_direct_yolov5n_pipeline.py \
 2. COCO で `pose_resnet50_se_direct_refine` を pretrain
 3. OpenThermalPose2 で detector / pose を fine-tune
 4. OTP2 test で benchmark
+
+`--yolov5-repo` を省略した場合は、`<train-output>/external/yolov5` に YOLOv5 リポジトリを自動で clone して利用します。
 
 この流れでは、`Set-A train` で fine-tune し、`Set-B test` を `val_annotation_file` として評価します。
 `summary.csv` には `pose_pckh50` と `joint_pckh50` も含まれます。
