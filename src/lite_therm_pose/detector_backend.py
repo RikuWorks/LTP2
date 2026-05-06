@@ -89,6 +89,10 @@ class YOLOv5DetectorAdapter:
         self.model.eval()
         self.parameter_source = getattr(self.model, "model", self.model)
 
+    def eval(self) -> "YOLOv5DetectorAdapter":
+        self.model.eval()
+        return self
+
     @torch.no_grad()
     def predict(self, image: np.ndarray) -> DetectorPrediction:
         if image.ndim == 3 and image.shape[2] == 1:
