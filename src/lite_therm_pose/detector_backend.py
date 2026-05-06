@@ -168,13 +168,14 @@ def predict_detector_image(detector: Any, cfg: ExperimentConfig, image: np.ndarr
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:
-    if dst.exists():
+    if dst.exists() or dst.is_symlink():
         return
     dst.parent.mkdir(parents=True, exist_ok=True)
+    source = src.resolve()
     try:
-        dst.symlink_to(src)
+        dst.symlink_to(source)
     except OSError:
-        shutil.copy2(src, dst)
+        shutil.copy2(source, dst)
 
 
 def _export_split_to_yolo(dataset_cfg: DatasetConfig, split_name: str, root: Path) -> tuple[Path, Path]:
