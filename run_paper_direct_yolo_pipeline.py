@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,7 +39,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def _run(command: list[str]) -> None:
-    process = subprocess.run(command, cwd=Path(__file__).resolve().parent, check=False)
+    env = os.environ.copy()
+    env.setdefault("MKL_THREADING_LAYER", "GNU")
+    env.setdefault("MKL_SERVICE_FORCE_INTEL", "1")
+    process = subprocess.run(command, cwd=Path(__file__).resolve().parent, check=False, env=env)
     if process.returncode != 0:
         raise RuntimeError(f"Command failed with exit code {process.returncode}: {' '.join(command)}")
 

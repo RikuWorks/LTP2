@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -65,6 +66,13 @@ def _python_executable() -> str:
     return sys.executable
 
 
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("MKL_THREADING_LAYER", "GNU")
+    env.setdefault("MKL_SERVICE_FORCE_INTEL", "1")
+    return env
+
+
 def _pose_train_command(model_name: str, config_path: Path, output_dir: Path, weights: str = "") -> list[str]:
     command = [
         _python_executable(),
@@ -98,7 +106,7 @@ def _detector_train_command(model_name: str, config_path: Path, output_dir: Path
 
 
 def _run_command(command: list[str], label: str) -> None:
-    process = subprocess.run(command, cwd=_repo_root(), check=False)
+    process = subprocess.run(command, cwd=_repo_root(), check=False, env=_subprocess_env())
     if process.returncode != 0:
         raise RuntimeError(f"{label} failed with exit code {process.returncode}")
 
@@ -165,10 +173,12 @@ def run_training(args: argparse.Namespace) -> Path:
         pose_pre_proc = subprocess.Popen(
             _pose_train_command(model_name, effective_pretrain_cfg, pose_pre_dir),
             cwd=_repo_root(),
+            env=_subprocess_env(),
         )
         det_fine_proc = subprocess.Popen(
             _detector_train_command(model_name, effective_finetune_cfg, det_fine_dir, args.yolov5_weights),
             cwd=_repo_root(),
+            env=_subprocess_env(),
         )
         pose_pre_code = pose_pre_proc.wait()
         det_fine_code = det_fine_proc.wait()
