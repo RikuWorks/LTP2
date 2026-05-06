@@ -719,6 +719,7 @@ python run_pose_direct_yolov5n_pipeline.py \
 4. OTP2 test で benchmark
 
 `--yolov5-repo` を省略した場合は、`<train-output>/external/yolov5` に YOLOv5 リポジトリを自動で clone して利用します。
+`runtime.detector_device` と `runtime.pose_device` が別 GPU になっている場合は、`pose pretrain` と `detector fine-tune` を並列に走らせ、2 枚の GPU を同時活用します。
 
 この流れでは、`Set-A train` で fine-tune し、`Set-B test` を `val_annotation_file` として評価します。
 `summary.csv` には `pose_pckh50` と `joint_pckh50` も含まれます。

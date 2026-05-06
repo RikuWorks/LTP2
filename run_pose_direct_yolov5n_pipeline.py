@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing as mp
 from pathlib import Path
 
 import yaml
@@ -10,6 +11,7 @@ import benchmark_otp2_testset as otp2_bench
 from lite_therm_pose import load_config
 from lite_therm_pose.evaluate import evaluate_detector_model, evaluate_joint_pipeline, evaluate_pose_model, write_summary_report
 from lite_therm_pose.profile import checkpoint_size_mb, parameter_stats
+from lite_therm_pose.runtime import resolve_model_device
 from lite_therm_pose.trainers import load_trained_detector, load_trained_pose, train_detector, train_pose
 from lite_therm_pose.utils import dataclass_to_dict, ensure_dir
 
@@ -49,6 +51,28 @@ def save_cfg(cfg, path: Path) -> None:
     path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
+def _run_pose_job(cfg, output_dir: str, weights: str, queue: mp.Queue, kind: str) -> None:
+    try:
+        _, stats = train_pose(cfg, output_dir, weights=weights)
+        queue.put({"kind": kind, "stats": stats, "error": ""})
+    except Exception as exc:  # pragma: no cover
+        queue.put({"kind": kind, "stats": None, "error": repr(exc)})
+
+
+def _run_detector_job(cfg, output_dir: str, weights: str, queue: mp.Queue, kind: str) -> None:
+    try:
+        _, stats = train_detector(cfg, output_dir, weights=weights)
+        queue.put({"kind": kind, "stats": stats, "error": ""})
+    except Exception as exc:  # pragma: no cover
+        queue.put({"kind": kind, "stats": None, "error": repr(exc)})
+
+
+def _supports_parallel(pretrain_cfg, finetune_cfg) -> bool:
+    pose_device = resolve_model_device(pretrain_cfg.runtime.pose_device, pretrain_cfg.runtime.device, "pose")
+    detector_device = resolve_model_device(finetune_cfg.runtime.detector_device, finetune_cfg.runtime.device, "detector")
+    return pose_device.type == "cuda" and detector_device.type == "cuda" and pose_device != detector_device
+
+
 def run_training(args: argparse.Namespace) -> Path:
     pretrain_cfg = prepare_cfg(args.pretrain_config, args)
     finetune_cfg = prepare_cfg(args.finetune_config, args)
@@ -57,9 +81,56 @@ def run_training(args: argparse.Namespace) -> Path:
     det_fine_dir = root / "finetune_detector"
     pose_fine_dir = root / "finetune_pose"
 
-    _, pose_pre_stats = train_pose(pretrain_cfg, pose_pre_dir)
-    _, det_fine_stats = train_detector(finetune_cfg, det_fine_dir, weights=args.yolov5_weights)
-    _, pose_fine_stats = train_pose(finetune_cfg, pose_fine_dir, weights=str(pose_pre_dir / "pose_last.pt"))
+    if _supports_parallel(pretrain_cfg, finetune_cfg):
+        ctx = mp.get_context("spawn")
+        queue: mp.Queue = ctx.Queue()
+        processes: list[mp.Process] = []
+
+        pose_pre_proc = ctx.Process(
+            target=_run_pose_job,
+            args=(pretrain_cfg, str(pose_pre_dir), "", queue, "pose_pre"),
+        )
+        det_fine_proc = ctx.Process(
+            target=_run_detector_job,
+            args=(finetune_cfg, str(det_fine_dir), args.yolov5_weights, queue, "det_fine"),
+        )
+        pose_pre_proc.start()
+        det_fine_proc.start()
+        processes.extend([pose_pre_proc, det_fine_proc])
+
+        stats_map: dict[str, dict] = {}
+        pose_fine_started = False
+        while len(stats_map) < 3:
+            item = queue.get()
+            if item["error"]:
+                for proc in processes:
+                    if proc.is_alive():
+                        proc.terminate()
+                for proc in processes:
+                    proc.join(timeout=1)
+                raise RuntimeError(f"{item['kind']} training failed: {item['error']}")
+            stats_map[item["kind"]] = item["stats"]
+            if item["kind"] == "pose_pre" and not pose_fine_started:
+                pose_fine_proc = ctx.Process(
+                    target=_run_pose_job,
+                    args=(finetune_cfg, str(pose_fine_dir), str(pose_pre_dir / "pose_last.pt"), queue, "pose_fine"),
+                )
+                pose_fine_proc.start()
+                processes.append(pose_fine_proc)
+                pose_fine_started = True
+
+        for proc in processes:
+            proc.join()
+            if proc.exitcode != 0:
+                raise RuntimeError(f"parallel training process failed with exit code {proc.exitcode}")
+
+        pose_pre_stats = stats_map["pose_pre"]
+        det_fine_stats = stats_map["det_fine"]
+        pose_fine_stats = stats_map["pose_fine"]
+    else:
+        _, pose_pre_stats = train_pose(pretrain_cfg, pose_pre_dir)
+        _, det_fine_stats = train_detector(finetune_cfg, det_fine_dir, weights=args.yolov5_weights)
+        _, pose_fine_stats = train_pose(finetune_cfg, pose_fine_dir, weights=str(pose_pre_dir / "pose_last.pt"))
 
     detector = load_trained_detector(finetune_cfg, det_fine_dir / "detector_last.pt")
     pose = load_trained_pose(finetune_cfg, pose_fine_dir / "pose_last.pt")
