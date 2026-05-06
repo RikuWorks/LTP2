@@ -107,9 +107,39 @@ def _run_command(command: list[str], label: str) -> None:
 
 def _read_training_stats(output_dir: Path, checkpoint_name: str) -> dict[str, float | list[float]]:
     checkpoint_path = output_dir / checkpoint_name
+    results_csv = output_dir / "yolov5_runs" / "train" / "results.csv"
+
+    if results_csv.exists():
+        import csv
+
+        with results_csv.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+
+        loss_history: list[float] = []
+        for row in rows:
+            parts: list[float] = []
+            for key in ("train/box_loss", "train/obj_loss", "val/box_loss", "val/obj_loss"):
+                value = row.get(key, "")
+                if not value:
+                    continue
+                try:
+                    parts.append(float(value))
+                except ValueError:
+                    continue
+            if parts:
+                loss_history.append(sum(parts) / len(parts))
+
+        return {
+            "loss_history": loss_history,
+            "train_seconds_total": 0.0,
+            "epoch_seconds_mean": 0.0,
+            "train_peak_memory_mb": 0.0,
+            "completed_epochs": len(rows),
+        }
+
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Expected checkpoint was not found: {checkpoint_path}")
-    payload = torch.load(str(checkpoint_path), map_location="cpu")
+    payload = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
     epoch = int(payload.get("epoch", 0)) if isinstance(payload, dict) else 0
     return {
         "loss_history": [],
