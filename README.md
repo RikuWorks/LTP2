@@ -713,9 +713,9 @@ python run_pose_direct_yolov5n_pipeline.py \
 
 この runner は次をまとめて行います。
 
-1. COCO で `YOLOv5n detector` を pretrain
-2. COCO で `pose_resnet50_se_direct_refine` を pretrain
-3. OpenThermalPose2 で detector / pose を fine-tune
+1. COCO で `pose_resnet50_se_direct_refine` を pretrain
+2. `yolov5n.pt` を初期重みにして OpenThermalPose2 で detector を fine-tune
+3. COCO pretrain 重みを使って OpenThermalPose2 で pose を fine-tune
 4. OTP2 test で benchmark
 
 `--yolov5-repo` を省略した場合は、`<train-output>/external/yolov5` に YOLOv5 リポジトリを自動で clone して利用します。

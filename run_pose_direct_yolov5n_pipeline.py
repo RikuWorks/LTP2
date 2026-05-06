@@ -53,14 +53,12 @@ def run_training(args: argparse.Namespace) -> Path:
     pretrain_cfg = prepare_cfg(args.pretrain_config, args)
     finetune_cfg = prepare_cfg(args.finetune_config, args)
     root = ensure_dir(Path(args.train_output) / POSE_MODEL)
-    det_pre_dir = root / "pretrain_detector"
     pose_pre_dir = root / "pretrain_pose"
     det_fine_dir = root / "finetune_detector"
     pose_fine_dir = root / "finetune_pose"
 
-    _, det_pre_stats = train_detector(pretrain_cfg, det_pre_dir)
     _, pose_pre_stats = train_pose(pretrain_cfg, pose_pre_dir)
-    _, det_fine_stats = train_detector(finetune_cfg, det_fine_dir, weights=str(det_pre_dir / "detector_last.pt"))
+    _, det_fine_stats = train_detector(finetune_cfg, det_fine_dir, weights=args.yolov5_weights)
     _, pose_fine_stats = train_pose(finetune_cfg, pose_fine_dir, weights=str(pose_pre_dir / "pose_last.pt"))
 
     detector = load_trained_detector(finetune_cfg, det_fine_dir / "detector_last.pt")
@@ -73,11 +71,11 @@ def run_training(args: argparse.Namespace) -> Path:
     row = {
         "model": POSE_MODEL,
         "model_family": "pose",
-        "det_pre_loss": round(float(det_pre_stats["loss_history"][-1]), 6) if det_pre_stats["loss_history"] else 0.0,
+        "det_pre_loss": 0.0,
         "pose_pre_loss": round(float(pose_pre_stats["loss_history"][-1]), 6) if pose_pre_stats["loss_history"] else 0.0,
         "det_fine_loss": round(float(det_fine_stats["loss_history"][-1]), 6) if det_fine_stats["loss_history"] else 0.0,
         "pose_fine_loss": round(float(pose_fine_stats["loss_history"][-1]), 6) if pose_fine_stats["loss_history"] else 0.0,
-        "det_pre_train_seconds": round(float(det_pre_stats["train_seconds_total"]), 6),
+        "det_pre_train_seconds": 0.0,
         "pose_pre_train_seconds": round(float(pose_pre_stats["train_seconds_total"]), 6),
         "det_fine_train_seconds": round(float(det_fine_stats["train_seconds_total"]), 6),
         "pose_fine_train_seconds": round(float(pose_fine_stats["train_seconds_total"]), 6),
